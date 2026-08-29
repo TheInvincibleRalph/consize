@@ -1,0 +1,33 @@
+.DS_Store
+
+# Local env / secrets
+.env
+.env.*
+deploy/dev/.env
+deploy/prod/env.sh
+!.env.example
+!deploy/dev/.env.example
+!deploy/prod/env.sh.example
+
+# Build outputs and caches
+engine/bin/
+engine/collector
+engine/.gocache/
+ui/node_modules/
+ui/.next/
+ui/out/
+ui/build/
+ui/coverage/
+ui/tsconfig.tsbuildinfo
+
+# Generated artifacts
+tmp/
+output/
+tests/e2e-live/out/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*

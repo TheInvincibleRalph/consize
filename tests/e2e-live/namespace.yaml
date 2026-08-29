@@ -1,0 +1,127 @@
+# Live-E2E namespace wiring (GKE devops-portfolio).
+#
+# consize-sandbox is the disposable test namespace — labeled for
+# mode=auto applies. boutique is the real workload Track 1 targets:
+# it gets the write binding but deliberately NO auto-apply label, so
+# it is approved-only (mode=auto would be blocked by the guardrail).
+#
+# Identities (deploy/rbac.yaml):
+#   consize-writer — apply + verify/rollback (update deployments only)
+#   consize-reader — collector ingestion (read-only)
+# Both are bound per-namespace; neither exists anywhere else.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: consize-sandbox
+  labels:
+    consize.savings.dev/auto-apply: enabled
+    consize.savings.dev/managed-by: consize
+---
+# --- write identity: role + binding per namespace ---------------------
+# The Role MUST exist in every namespace that binds it: RoleRefs resolve
+# in the binding's namespace only (a binding to a Role in consize-system
+# would dangle). Same least-privilege surface as deploy/rbac.yaml:
+# deployments get/list/watch/update — nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: consize-apply
+  namespace: consize-sandbox
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: consize-apply
+  namespace: consize-sandbox
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: consize-apply
+subjects:
+  - kind: ServiceAccount
+    name: consize-writer
+    namespace: consize-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: consize-apply
+  namespace: boutique
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: consize-apply
+  namespace: boutique
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: consize-apply
+subjects:
+  - kind: ServiceAccount
+    name: consize-writer
+    namespace: consize-system
+---
+# --- read identity: role + binding per analyzed namespace -------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: consize-read
+  namespace: consize-sandbox
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: consize-read
+  namespace: consize-sandbox
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: consize-read
+subjects:
+  - kind: ServiceAccount
+    name: consize-reader
+    namespace: consize-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: consize-read
+  namespace: boutique
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: consize-read
+  namespace: boutique
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: consize-read
+subjects:
+  - kind: ServiceAccount
+    name: consize-reader
+    namespace: consize-system

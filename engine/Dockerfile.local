@@ -1,0 +1,24 @@
+# Dockerfile.local — host-compiled fallback for machines where Docker Hub is
+# proxied or unreachable (the golang:alpine build base cannot be pulled, e.g.
+# a TLS-intercepting mirror serving an untrusted cert for registry-1.docker.io).
+#
+# Compile the binary with the local toolchain (module cache offline), then
+# package it into the distroless image, which comes from gcr.io (directly
+# reachable). Nothing in this path touches Docker Hub.
+#
+#   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+#     -ldflags="-s -w" -o bin/<bin> ./cmd/<bin>
+#   docker build -f Dockerfile.local --build-arg BIN=<bin> \
+#     -t consize/<bin>:latest .
+#
+# The canonical multi-stage Dockerfile (golang base → distroless) remains the
+# CI build; this variant exists for machines whose registry access is broken.
+ARG BIN
+
+FROM gcr.io/distroless/static-debian12:nonroot
+# ARG must be re-declared inside the stage: a global ARG (above FROM) is
+# only visible in FROM lines, and an undefined $BIN silently copies bin/.
+ARG BIN
+COPY bin/${BIN} /consize
+USER nonroot:nonroot
+ENTRYPOINT ["/consize"]

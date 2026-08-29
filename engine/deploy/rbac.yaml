@@ -1,0 +1,62 @@
+# Consize write identity (docs/security.md — Consize → k8s (write)).
+#
+# Least privilege by construction:
+#   - the Role is scoped to deployments ONLY: get/list/watch/update
+#     (the patcher is GET → mutate → Update guarded by resourceVersion;
+#     it never calls scale, never creates or deletes anything, never
+#     touches secrets or RBAC objects)
+#   - RoleBindings are per-namespace and exist ONLY for namespaces
+#     carrying the auto-apply opt-in label
+#     (consize.savings.dev/auto-apply=enabled) — never cluster-wide
+#   - the same identity drives apply AND verify/rollback (one write
+#     surface, ADR-021)
+#
+# NOTE: security.md originally listed `patch deployments` — the guarded
+# UPDATE needs the `update` verb, which is all this Role grants.
+#
+# The collector's read identity (consize-reader) is deployed by the
+# stack wiring (tests/e2e-live/namespace.yaml): a read-only Role bound
+# per analyzed namespace. It lists workloads it ingests and never writes.
+#
+# Applying:
+#   kubectl apply -f deploy/rbac.yaml
+#   # for each auto-apply namespace (label it first, then bind). The
+#   # Role must be recreated in the namespace: RoleRefs resolve in the
+#   # binding's namespace only (tests/e2e-live/namespace.yaml has the
+#   # full per-namespace pair).
+#   kubectl label ns <ns> consize.savings.dev/auto-apply=enabled
+#   kubectl create role consize-apply -n <ns> \
+#     --verb=get,list,watch,update --resource=deployments
+#   kubectl create rolebinding consize-apply -n <ns> \
+#     --serviceaccount=consize-system:consize-writer --role=consize-apply
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: consize-system
+  labels:
+    consize.savings.dev/managed-by: consize
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: consize-writer
+  namespace: consize-system
+---
+# Collector read identity — read-only; bound per analyzed namespace
+# (tests/e2e-live/namespace.yaml), never cluster-wide.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: consize-reader
+  namespace: consize-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: consize-apply
+  namespace: consize-system
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "update"]

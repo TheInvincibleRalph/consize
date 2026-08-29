@@ -1,0 +1,58 @@
+# Collector CronJob (ADR-011): every 15 minutes, ingest k8s metadata +
+# Prometheus usage into usage_buckets. Runs with the read identity
+# (consize-reader): list/watch the workloads it analyzes — never writes.
+#
+# CONSIZE_NAMESPACES (ADR-025): scope collection to named namespaces so
+# the read identity needs only per-namespace Roles (bound by
+# tests/e2e-live/namespace.yaml). The live-cluster E2E sets the two
+# analyzed namespaces; the shipped default (unset) is cluster-wide,
+# which requires a cluster-scope read Role for the collector.
+#
+# PROMETHEUS_URL points at the cluster's kube-prometheus-stack; the
+# ServiceMonitor CRDs already scrape kubelet/cadvisor, which is where
+# the usage percentiles come from.
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: consize-collector
+  namespace: consize-system
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: consize-reader
+          restartPolicy: OnFailure
+          containers:
+            - name: collector
+              image: consize/collector:latest
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: consize-store
+                      key: database-url
+                - name: PROMETHEUS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: consize-store
+                      key: prometheus-url
+                # ADR-025: per-namespace collection scoping (E2E value;
+                # shipped default = unset = cluster-wide).
+                - name: CONSIZE_NAMESPACES
+                  value: "boutique,consize-sandbox"
+                # ADR-030 §8 / ADR-033: the database surface. "fixture"
+                # seeds the deterministic demo instance (payments-prod)
+                # for the live-cluster demo; unset = k8s only.
+                - name: CONSIZE_DBMETRICS
+                  value: "fixture"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi

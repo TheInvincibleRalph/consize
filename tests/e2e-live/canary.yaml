@@ -1,0 +1,61 @@
+# The E2E canary — a synthetic workload whose memory footprint is
+# exactly known: it holds ~180 MiB and serves a healthz endpoint.
+#
+# Track 2 design (see docs/e2e.md):
+#   - analysis sees ~180 MiB usage under a 256 Mi request → recommends a
+#     safe downsize (request = p95 × 1.2 ≥ usage, so the apply itself can
+#     never OOM — the policy is built that way)
+#   - the E2E then impersonates a bad release (`kubectl set resources`
+#     to 64/96 Mi) — a forced regression inside the verification window
+#     — which OOM-kills the canary; the verifier FAILs on the new OOM
+#     events and auto-rolls back to the applied values
+#   - the liveness probe makes the regression visible as a CrashLoop
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consize-canary
+  namespace: consize-sandbox
+  labels:
+    app: consize-canary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: consize-canary
+  template:
+    metadata:
+      labels:
+        app: consize-canary
+    spec:
+      containers:
+        - name: canary
+          image: python:3.12-slim
+          command:
+            - python
+            - -c
+            - |
+              import http.server
+              buf = bytearray(180 * 1024 * 1024)  # hold ~180 MiB
+              class H(http.server.BaseHTTPRequestHandler):
+                  def do_GET(self):
+                      self.send_response(200)
+                      self.end_headers()
+                  def log_message(self, *a):
+                      pass
+              http.server.HTTPServer(("0.0.0.0", 8080), H).serve_forever()
+          ports:
+            - containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 1000m
+              memory: 256Mi
+            limits:
+              cpu: 2000m
+              memory: 512Mi

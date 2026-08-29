@@ -1,0 +1,106 @@
+# Consize REST API. Runs with the write identity (consize-writer,
+# rbac.yaml): /recommendations/{id}/apply and rollback go through it,
+# so the pod needs the least-privilege RoleBinding for every namespace
+# it is allowed to touch (deployed per-namespace by the stack wiring).
+#
+# KUBECONFIG is deliberately not set: the client library falls back to
+# the in-cluster config, so the ServiceAccount IS the write identity.
+#
+# Auth (ADR-037): the image ships the login/session routes, but this
+# cluster build runs CONSIZE_AUTH_REQUIRED=false for now — the embedded
+# SPA fallback and the curl actor flows stay functional until onboarding
+# lands (E1.5). Flipping it to true and adding CONSIZE_BOOTSTRAP_ADMIN
+# (Secret key bootstrap-admin, "email:password") turns enforcement on;
+# the bootstrap admin is created only while the users table is empty.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consize-api
+  namespace: consize-system
+  labels:
+    app: consize-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: consize-api
+  template:
+    metadata:
+      labels:
+        app: consize-api
+    spec:
+      serviceAccountName: consize-writer
+      containers:
+        - name: api
+          image: consize/api:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: consize-store
+                  key: database-url
+            - name: CONSIZE_AUTH_REQUIRED
+              value: "false"
+            # Live-E2E window; keep aligned with verify-cronjob.yaml so
+            # /api/v1/system/status reports the verifier's actual cadence.
+            # Production deploys can omit this and use the 24h default.
+            - name: CONSIZE_VERIFY_WINDOW
+              value: "15m"
+            # Optional Slack secret used by the Alerting UI's "Send test" and
+            # by stored contact-point configs that reference this env var.
+            # The webhook value itself is never stored in Postgres.
+            - name: CONSIZE_SLACK_WEBHOOK
+              valueFrom:
+                secretKeyRef:
+                  name: consize-alerts
+                  key: slack-webhook
+                  optional: true
+            - name: CONSIZE_BOOTSTRAP_ADMIN
+              valueFrom:
+                secretKeyRef:
+                  name: consize-auth
+                  key: bootstrap-admin
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 18
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: consize-api
+  namespace: consize-system
+spec:
+  selector:
+    app: consize-api
+  ports:
+    - port: 8080
+      targetPort: 8080

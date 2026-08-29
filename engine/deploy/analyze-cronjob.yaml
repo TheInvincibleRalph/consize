@@ -1,0 +1,40 @@
+# Analyzer CronJob (ADR-011): every 15 minutes, buckets → recommendations
+# (superseding stale pending ones). Pure policy — store access only, no
+# cluster identity (the API pod holds the write identity).
+#
+# CONSIZE_MIN_DATA_DAYS is the data-minimum confidence gate (ADR-024).
+# 0.1 is the value used by the live E2E — "any data within the window
+# suffices" — because this cluster's Prometheus is ephemeral (no PVC)
+# and no workload has long history. The shipped default is 5.
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: consize-analyze
+  namespace: consize-system
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: analyze
+              image: consize/analyze:latest
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: consize-store
+                      key: database-url
+                - name: CONSIZE_MIN_DATA_DAYS
+                  value: "0.1"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi

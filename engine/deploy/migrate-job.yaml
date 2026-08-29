@@ -1,0 +1,35 @@
+# One-shot schema migration (cmd/migrate runs the embedded migrations).
+#
+# Run once after the store Secret exists:
+#   kubectl apply -f deploy/migrate-job.yaml
+#   kubectl wait --for=condition=complete job/consize-migrate -n consize-system --timeout=120s
+#
+# Rerunning is safe: migrations are embedded and versioned; cmd/migrate
+# skips already-applied versions.
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: consize-migrate
+  namespace: consize-system
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: consize/migrate:latest
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: consize-store
+                  key: database-url
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

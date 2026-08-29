@@ -1,0 +1,43 @@
+# Consize's shared store — a tiny CloudNativePG Postgres Cluster.
+#
+# Why CloudNativePG: the operator is already installed on this cluster
+# (cnpg-system namespace), and a real Postgres is required for a
+# multi-component deployment — the in-memory store is per-process, while
+# collector → analyze → api → verify must share one audit trail
+# (ADR-008: apply_events is INSERT-only).
+#
+# The operator generates a Secret `consize-db-app` (keys: username,
+# password, dbname, host, port). The deployment runbook builds the
+# `consize-store` Secret (DATABASE_URL + PROMETHEUS_URL) from it:
+#
+#   PGPW=$(kubectl get secret consize-db-app -n consize-system \
+#     -o jsonpath='{.data.password}' | base64 -d)
+#   kubectl create secret generic consize-store -n consize-system \
+#     --from-literal=database-url="postgres://app:${PGPW}@consize-db-rw.consize-system.svc:5432/app" \
+#     --from-literal=prometheus-url="http://monitoring-kube-prometheus-prometheus.monitoring:9090"
+#
+# Applying:
+#   kubectl apply -f deploy/postgres.yaml
+#   kubectl wait --for=condition=Ready cluster/consize-db -n consize-system --timeout=300s
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: consize-db
+  namespace: consize-system
+spec:
+  instances: 1
+  # imageName omitted: the operator pins its supported Postgres version.
+  storage:
+    size: 1Gi
+    storageClass: standard-rwo
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # The audit trail is INSERT-only by contract, but no superuser on the
+  # app role regardless: the app user gets its own database.
+  enableSuperuserAccess: false

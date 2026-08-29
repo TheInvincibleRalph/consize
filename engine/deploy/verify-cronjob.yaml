@@ -1,0 +1,97 @@
+# Verifier CronJob (ADR-018): find applied events whose
+# verification window is due, compare SLIs, record the verdict, and
+# roll back + alert on FAIL. Uses the write identity — rollback is a
+# patch like any other (ADR-021).
+#
+# Env wiring:
+#   DATABASE_URL / PROMETHEUS_URL from a Secret (example below)
+#   CONSIZE_VERIFY_WINDOW   default 24h — the live E2E shortens it to 15m
+#   CONSIZE_SUSTAINED_MINUTES default 5 — the live E2E uses 3
+#   CONSIZE_SLI_ERROR_EXPR / CONSIZE_SLI_P99_EXPR  opt-in app-level SLIs
+#   CONSIZE_ALERT_ROUTING   Grafana-style contact points + notification policies
+#   CONSIZE_SLACK_WEBHOOK   legacy/default Slack contact point webhook
+#
+# NOTE: the two overrides below are the live E2E's session-length
+# windows; a production deployment would omit them and take the
+# 24h / 5m defaults.
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: consize-verify
+  namespace: consize-system
+spec:
+  schedule: "*/15 * * * *" # live/demo cadence; production can run hourly with the 24h window
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: consize-writer
+          restartPolicy: OnFailure
+          containers:
+            - name: verify
+              image: consize/verify:latest
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: consize-store
+                      key: database-url
+                - name: PROMETHEUS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: consize-store
+                      key: prometheus-url
+                # Live-E2E windows (see header comment); omit for the
+                # shipped 24h / 5m defaults.
+                - name: CONSIZE_VERIFY_WINDOW
+                  value: "15m"
+                - name: CONSIZE_SUSTAINED_MINUTES
+                  value: "3"
+                # Grafana-style notification routing. Secrets stay in env vars
+                # (from Kubernetes Secrets); routing JSON references them by
+                # name. If this is omitted, CONSIZE_SLACK_WEBHOOK alone still
+                # becomes the default Slack contact point.
+                #
+                # - name: CONSIZE_ALERT_ROUTING
+                #   value: |
+                #     {
+                #       "default_contact_point": "ops-slack",
+                #       "contact_points": [
+                #         {
+                #           "name": "ops-slack",
+                #           "integrations": [
+                #             {
+                #               "type": "slack",
+                #               "webhook_env": "CONSIZE_SLACK_WEBHOOK",
+                #               "channel": "#platform-oncall",
+                #               "mention": "<!subteam^S123456>"
+                #             }
+                #           ]
+                #         }
+                #       ],
+                #       "notification_policies": [
+                #         {
+                #           "name": "critical-verification",
+                #           "match": {
+                #             "severity": "critical",
+                #             "alertname": "ConsizeVerificationFailed"
+                #           },
+                #           "contact_point": "ops-slack"
+                #         }
+                #       ]
+                #     }
+                - name: CONSIZE_SLACK_WEBHOOK
+                  valueFrom:
+                    secretKeyRef:
+                      name: consize-alerts
+                      key: slack-webhook
+                      optional: true
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
