@@ -2,6 +2,8 @@ package costscan
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"consize/internal/store"
@@ -18,6 +20,21 @@ type Source interface {
 	Scan(ctx context.Context) ([]store.CostOpportunity, error)
 }
 
+type DirectApplier interface {
+	ApplyDirect(ctx context.Context, opp store.CostOpportunity, mode string) (DirectApplyResult, error)
+}
+
+type DirectApplyResult struct {
+	OpportunityID int64
+	Provider      string
+	ResourceType  string
+	ResourceID    string
+	Name          string
+	Mode          string
+	Applied       bool
+	Message       string
+}
+
 type Service struct {
 	Source Source
 	Store  store.Store
@@ -25,7 +42,7 @@ type Service struct {
 
 func (s Service) Run(ctx context.Context) ([]store.CostOpportunity, error) {
 	if s.Source == nil {
-		s.Source = FixtureSource{}
+		return nil, fmt.Errorf("cloud waste scanner is not configured; set CONSIZE_COSTSCAN=gcp or run the fixture demo explicitly")
 	}
 	opps, err := s.Source.Scan(ctx)
 	if err != nil {
@@ -38,6 +55,29 @@ func (s Service) Run(ctx context.Context) ([]store.CostOpportunity, error) {
 		return s.Store.ListCostOpportunities(ctx, store.OpportunityOpen)
 	}
 	return opps, nil
+}
+
+func SourceFor(kind string) (Source, string, error) {
+	switch strings.TrimSpace(strings.ToLower(kind)) {
+	case "", "none", "disabled":
+		return nil, "disabled", nil
+	case "fixture":
+		return FixtureSource{}, "fixture", nil
+	case "gcp":
+		return NewGCPSource(), "Google Compute Engine (CONSIZE_COSTSCAN=gcp)", nil
+	}
+	return nil, "", fmt.Errorf("unknown source %q (supported: none, fixture, gcp)", kind)
+}
+
+func DirectApplierFor(provider string) (DirectApplier, error) {
+	switch strings.TrimSpace(strings.ToLower(provider)) {
+	case "gcp":
+		return NewGCPSource(), nil
+	case "aws", "":
+		return nil, fmt.Errorf("direct cleanup is not configured for provider %q yet; open an IaC PR instead", provider)
+	default:
+		return nil, fmt.Errorf("direct cleanup is not supported for provider %q", provider)
+	}
 }
 
 type FixtureSource struct{}

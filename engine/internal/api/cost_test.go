@@ -8,6 +8,7 @@ import (
 )
 
 func TestCostOpportunityScanAndList(t *testing.T) {
+	t.Setenv("CONSIZE_COSTSCAN", "fixture")
 	h, _ := newTestServer(t)
 
 	rec := post(t, h, "/api/v1/cost-opportunities/scan", map[string]any{})
@@ -45,6 +46,7 @@ func TestCostOpportunityScanAndList(t *testing.T) {
 }
 
 func TestPrepareIaCPullRequestPlan(t *testing.T) {
+	t.Setenv("CONSIZE_COSTSCAN", "fixture")
 	h, _ := newTestServer(t)
 	rec := post(t, h, "/api/v1/cost-opportunities/scan", map[string]any{})
 	if rec.Code != http.StatusOK {
@@ -155,7 +157,7 @@ func TestPrepareRecommendationIaCPullRequestRejectsDirectoryPath(t *testing.T) {
 	rec := post(t, h, "/api/v1/recommendations/"+itoa(recID)+"/iac-pr", map[string]any{
 		"path": "infra/terraform",
 	})
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "must point to a .tf") {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "supported IaC file") {
 		t.Fatalf("directory path should be rejected: %d %s", rec.Code, rec.Body.String())
 	}
 }

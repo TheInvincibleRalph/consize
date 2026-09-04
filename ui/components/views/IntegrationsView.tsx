@@ -44,7 +44,7 @@ function errMessage(err: unknown): string {
 
 function repoTemplate(index: number): GitHubRepository {
   return {
-    alias: index === 0 ? "infra" : `repo-${index + 1}`,
+    alias: index === 0 ? "cluster" : `repo-${index + 1}`,
     repo: "",
     default_branch: "main",
     root_path: "",
@@ -143,7 +143,7 @@ export default function IntegrationsView() {
           </div>
           <div>
             <h2 className="card-title">GitHub</h2>
-            <p>Repository access for Terraform pull requests.</p>
+            <p>Repository access for infrastructure-as-code pull requests.</p>
           </div>
         </div>
         <div className="integration-status">
@@ -200,15 +200,15 @@ export default function IntegrationsView() {
                 />
               </label>
               <label className="config-field">
-                <span>Default Terraform path</span>
+                <span>Default source path</span>
                 <input
                   className="config-input mono"
                   value={config.default_path}
                   disabled={!canWrite}
                   onChange={(e) => updateConfig({ default_path: e.target.value })}
-                  placeholder="terraform/workloads.tf"
+                  placeholder="terraform/workloads.tf or kubernetes/apps/deployment.yaml"
                 />
-                <small>Optional file path. If root path is already the Terraform folder, use `workloads.tf`.</small>
+                <small>Optional repo-relative file path. If a repo has a root path, enter the file under that root.</small>
               </label>
             </div>
           </section>
@@ -229,22 +229,31 @@ export default function IntegrationsView() {
                 {config.repositories.map((repo, index) => (
                   <article className="alerting-card" key={`${repo.alias}-${index}`}>
                     <div className="alerting-card-head">
-                      <div className="integration-card-title">
-                        <GitBranch size={15} />
-                        <input
-                          className="config-input title"
-                          value={repo.alias || ""}
-                          disabled={!canWrite}
-                          onChange={(e) => updateRepo(index, { alias: e.target.value })}
-                          aria-label="Repository alias"
-                          placeholder="infra"
-                        />
+                      <div className="repo-card-heading">
+                        <div className="integration-icon small">
+                          <GitBranch size={14} />
+                        </div>
+                        <div>
+                          <h3>Repository {index + 1}</h3>
+                          <p>Authorized source repo for IaC pull requests.</p>
+                        </div>
                       </div>
                       <button className="btn small" type="button" onClick={() => removeRepo(index)} disabled={!canWrite}>
                         <Trash2 size={13} /> Remove
                       </button>
                     </div>
                     <div className="integration-form-grid">
+                      <label className="config-field">
+                        <span>Alias</span>
+                        <input
+                          className="config-input"
+                          value={repo.alias || ""}
+                          disabled={!canWrite}
+                          onChange={(e) => updateRepo(index, { alias: e.target.value })}
+                          placeholder="cluster"
+                        />
+                        <small>Short name operators can use instead of owner/repo.</small>
+                      </label>
                       <label className="config-field">
                         <span>Repository</span>
                         <input
@@ -304,7 +313,7 @@ export default function IntegrationsView() {
             <div className="alerting-copy">
               <p>Use a scoped GitHub token or app installation with repository read/write and pull-request access.</p>
               <p>Consize stores repo metadata only. The token itself stays in the API environment.</p>
-              <p>Recommendation PRs can use these defaults, or an operator can override the repo and file at review time.</p>
+              <p>Recommendation PRs can use these defaults, or an operator can override the repo and source file at review time.</p>
             </div>
           </section>
         </aside>

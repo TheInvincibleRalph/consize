@@ -134,7 +134,7 @@ func validateGitHubIntegration(cfg githubIntegrationConfig) error {
 		return fmt.Errorf("default_repo must be owner/repo unless organization is set")
 	}
 	if looksLikeURL(cfg.DefaultPath) {
-		return fmt.Errorf("default_path must be a repo-relative Terraform file path, not a URL")
+		return fmt.Errorf("default_path must be a repo-relative source file path, not a URL")
 	}
 	for i, r := range cfg.Repositories {
 		if r.Repo == "" {

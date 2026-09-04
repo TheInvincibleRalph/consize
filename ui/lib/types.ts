@@ -45,6 +45,8 @@ export interface Recommendation {
   CreatedAt: string;
   ClassCurrent?: string;
   ClassProposed?: string;
+  StepNumber?: number;
+  TotalSteps?: number;
   risk?: string;
   risk_reasons?: string[] | string;
   Risk?: string;
@@ -262,8 +264,20 @@ export interface IaCPullRequest {
   CreatedAt: string;
 }
 
+export interface CostAction {
+  ID: number;
+  OpportunityID: number;
+  Actor: string;
+  Mode: string;
+  Result: "requested" | "dry_run" | "applied" | "failed" | string;
+  Message: string;
+  Evidence?: Record<string, unknown>;
+  CreatedAt: string;
+}
+
 export interface CostOpportunitiesResponse {
   opportunities: CostOpportunity[];
+  actions?: CostAction[];
   latest_prs?: Record<string, IaCPullRequest>;
   summary?: {
     count: number;
@@ -278,6 +292,23 @@ export interface CostScanResponse {
     count: number;
     monthly_savings: number;
   };
+}
+
+export interface CostApplyResult {
+  OpportunityID: number;
+  Provider: string;
+  ResourceType: string;
+  ResourceID: string;
+  Name: string;
+  Mode: string;
+  Applied: boolean;
+  Message: string;
+}
+
+export interface CostApplyResponse {
+  result: CostApplyResult;
+  opportunity: CostOpportunity;
+  actor: string;
 }
 
 export interface IaCPullRequestResponse {

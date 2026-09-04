@@ -233,8 +233,11 @@ export function UsageChart({
         )}
         {status === "empty" && (
           <div className="chart-empty">
-            <strong>No chart data yet</strong>
-            <span>The series endpoint has no data for this workload and metric yet.</span>
+            <strong>No usage telemetry yet</strong>
+            <span>
+              Consize can see this workload, but no pod usage has been mapped for the selected metric.
+              Check that it has running pods, or try the other metric.
+            </span>
           </div>
         )}
         {status === "ready" && (

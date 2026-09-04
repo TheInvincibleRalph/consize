@@ -11,9 +11,9 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"time"
 
 	"consize/internal/store"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 func canOpenGitHubPullRequest(cfg githubIntegrationConfig, pr store.IaCPullRequest) bool {
@@ -35,7 +35,7 @@ func openGitHubPullRequest(ctx context.Context, cfg githubIntegrationConfig, rec
 	}
 	path := diffPath(pr.Diff)
 	if path == "" {
-		return pr, fmt.Errorf("Terraform file path is missing")
+		return pr, fmt.Errorf("source file path is missing")
 	}
 	client := githubClient{
 		baseURL: strings.TrimRight(firstNonEmpty(os.Getenv("CONSIZE_GITHUB_API_BASE"), "https://api.github.com"), "/"),
@@ -57,24 +57,40 @@ func openGitHubPullRequest(ctx context.Context, cfg githubIntegrationConfig, rec
 	if err != nil {
 		return pr, err
 	}
-	kind, name, ok := terraformResourceFromDiff(pr.Diff)
-	if !ok {
-		return pr, fmt.Errorf("Terraform resource could not be resolved from generated diff")
+	var next string
+	switch iacProviderForPath(path) {
+	case "kubernetes-yaml":
+		next, err = patchRecommendationKubernetesYAMLContent(content, rec, wl)
+	case "helm-values":
+		err = fmt.Errorf("Helm values PRs need an explicit values key mapping; use a Kubernetes YAML manifest or Terraform file for this PR, or add Helm values mapping first")
+	default:
+		var kind, name string
+		var ok bool
+		kind, name, ok = terraformResourceFromDiff(pr.Diff)
+		if !ok {
+			return pr, fmt.Errorf("Terraform resource could not be resolved from generated diff")
+		}
+		next, err = patchRecommendationTerraformContent(content, rec, wl, kind, name)
 	}
-	next, err := patchRecommendationTerraformContent(content, rec, wl, kind, name)
 	if err != nil {
 		return pr, err
 	}
 	branch := pr.Branch
 	if err := client.createBranch(ctx, owner, repo, branch, baseSHA); err != nil {
 		if isGitHubConflict(err) {
-			branch = branch + "-" + time.Now().UTC().Format("20060102150405")
-			if err := client.createBranch(ctx, owner, repo, branch, baseSHA); err != nil {
-				return pr, err
+			existingURL, ok, lookupErr := client.findOpenPullRequest(ctx, owner, repo, branch, defaultBranch)
+			if lookupErr != nil {
+				return pr, lookupErr
 			}
-		} else {
-			return pr, err
+			if ok {
+				pr.Status = store.IaCPROpened
+				pr.URL = existingURL
+				pr.Error = ""
+				return pr, nil
+			}
+			return pr, fmt.Errorf("GitHub branch %q already exists without an open PR; close, rename, or delete that branch before opening a new Consize PR", branch)
 		}
+		return pr, err
 	}
 	message := fmt.Sprintf("Rightsize %s/%s %s", wl.Namespace, wl.Name, rec.Resource)
 	if err := client.updateFile(ctx, owner, repo, path, branch, message, next, sha); err != nil {
@@ -82,6 +98,18 @@ func openGitHubPullRequest(ctx context.Context, cfg githubIntegrationConfig, rec
 	}
 	url, err := client.createPullRequest(ctx, owner, repo, pr.Title, pr.Body, branch, defaultBranch)
 	if err != nil {
+		if isGitHubConflict(err) {
+			existingURL, ok, lookupErr := client.findOpenPullRequest(ctx, owner, repo, branch, defaultBranch)
+			if lookupErr != nil {
+				return pr, lookupErr
+			}
+			if ok {
+				pr.Status = store.IaCPROpened
+				pr.URL = existingURL
+				pr.Error = ""
+				return pr, nil
+			}
+		}
 		return pr, err
 	}
 	pr.Branch = branch
@@ -102,7 +130,10 @@ func openGitHubPullRequestForCostOpportunity(ctx context.Context, cfg githubInte
 	}
 	path := diffPath(pr.Diff)
 	if path == "" {
-		return pr, fmt.Errorf("Terraform file path is missing")
+		return pr, fmt.Errorf("source file path is missing")
+	}
+	if !isTerraformFilePath(path) {
+		return pr, fmt.Errorf("cloud waste PRs currently require a Terraform file because the resources are cloud-provider objects, not Kubernetes workload manifests")
 	}
 	client := githubClient{
 		baseURL: strings.TrimRight(firstNonEmpty(os.Getenv("CONSIZE_GITHUB_API_BASE"), "https://api.github.com"), "/"),
@@ -135,13 +166,19 @@ func openGitHubPullRequestForCostOpportunity(ctx context.Context, cfg githubInte
 	branch := pr.Branch
 	if err := client.createBranch(ctx, owner, repo, branch, baseSHA); err != nil {
 		if isGitHubConflict(err) {
-			branch = branch + "-" + time.Now().UTC().Format("20060102150405")
-			if err := client.createBranch(ctx, owner, repo, branch, baseSHA); err != nil {
-				return pr, err
+			existingURL, ok, lookupErr := client.findOpenPullRequest(ctx, owner, repo, branch, defaultBranch)
+			if lookupErr != nil {
+				return pr, lookupErr
 			}
-		} else {
-			return pr, err
+			if ok {
+				pr.Status = store.IaCPROpened
+				pr.URL = existingURL
+				pr.Error = ""
+				return pr, nil
+			}
+			return pr, fmt.Errorf("GitHub branch %q already exists without an open PR; close, rename, or delete that branch before opening a new Consize PR", branch)
 		}
+		return pr, err
 	}
 	message := fmt.Sprintf("Remove %s %s", humanResourceType(opp.ResourceType), displayName(opp))
 	if err := client.updateFile(ctx, owner, repo, path, branch, message, next, sha); err != nil {
@@ -149,6 +186,18 @@ func openGitHubPullRequestForCostOpportunity(ctx context.Context, cfg githubInte
 	}
 	url, err := client.createPullRequest(ctx, owner, repo, pr.Title, pr.Body, branch, defaultBranch)
 	if err != nil {
+		if isGitHubConflict(err) {
+			existingURL, ok, lookupErr := client.findOpenPullRequest(ctx, owner, repo, branch, defaultBranch)
+			if lookupErr != nil {
+				return pr, lookupErr
+			}
+			if ok {
+				pr.Status = store.IaCPROpened
+				pr.URL = existingURL
+				pr.Error = ""
+				return pr, nil
+			}
+		}
 		return pr, err
 	}
 	pr.Branch = branch
@@ -264,7 +313,7 @@ func (c githubClient) getFile(ctx context.Context, owner, repo, path, ref string
 	}
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) > 0 && trimmed[0] == '[' {
-		return "", "", fmt.Errorf("GitHub path %q is a directory; select a Terraform file such as %s/workloads.tf", path, strings.TrimRight(path, "/"))
+		return "", "", fmt.Errorf("GitHub path %q is a directory; select a source file such as %s/workloads.tf or %s/deployment.yaml", path, strings.TrimRight(path, "/"), strings.TrimRight(path, "/"))
 	}
 	var body struct {
 		Content  string `json:"content"`
@@ -311,6 +360,29 @@ func (c githubClient) createPullRequest(ctx context.Context, owner, repo, title,
 		return "", err
 	}
 	return firstNonEmpty(res.HTMLURL, res.URL), nil
+}
+
+func (c githubClient) findOpenPullRequest(ctx context.Context, owner, repo, head, base string) (string, bool, error) {
+	var prs []struct {
+		HTMLURL string `json:"html_url"`
+		URL     string `json:"url"`
+	}
+	path := fmt.Sprintf(
+		"/repos/%s/%s/pulls?state=open&head=%s&base=%s",
+		url.PathEscape(owner),
+		url.PathEscape(repo),
+		url.QueryEscape(owner+":"+head),
+		url.QueryEscape(base),
+	)
+	if err := c.do(ctx, http.MethodGet, path, nil, &prs); err != nil {
+		return "", false, err
+	}
+	for _, pr := range prs {
+		if link := firstNonEmpty(pr.HTMLURL, pr.URL); link != "" {
+			return link, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 func parseGitHubRepo(raw string) (owner, repo string, err error) {
@@ -384,6 +456,201 @@ func patchRecommendationTerraformContent(content string, rec store.Recommendatio
 	return content[:start] + nextBlock + content[end:], nil
 }
 
+func patchRecommendationKubernetesYAMLContent(content string, rec store.Recommendation, wl store.Workload) (string, error) {
+	if rec.Resource == store.ResourceClass {
+		return "", fmt.Errorf("database class recommendations need Terraform or provider-specific IaC, not a Kubernetes YAML manifest")
+	}
+	docs, err := decodeYAMLDocuments(content)
+	if err != nil {
+		return "", err
+	}
+	if len(docs) == 0 {
+		return "", fmt.Errorf("YAML file is empty")
+	}
+	var matched bool
+	for i := range docs {
+		root := yamlDocumentRoot(&docs[i])
+		if root == nil || !kubernetesDocumentMatches(root, wl) {
+			continue
+		}
+		matched = true
+		container, err := selectWorkloadContainer(root, rec, wl)
+		if err != nil {
+			return "", err
+		}
+		return patchKubernetesYAMLResourceText(content, rec, wl, container.Line)
+	}
+	if !matched {
+		return "", fmt.Errorf("could not find Kubernetes %s %q for namespace %q in the selected YAML file", kubernetesManifestKind(wl), wl.Name, wl.Namespace)
+	}
+	return "", fmt.Errorf("could not patch Kubernetes %s %q", kubernetesManifestKind(wl), wl.Name)
+}
+
+func patchKubernetesYAMLResourceText(content string, rec store.Recommendation, wl store.Workload, containerLine int) (string, error) {
+	lines := splitLinesPreservingEndings(content)
+	containerIndex := containerLine - 1
+	if containerIndex < 0 || containerIndex >= len(lines) {
+		return "", fmt.Errorf("could not locate container line for Kubernetes %s %q", kubernetesManifestKind(wl), wl.Name)
+	}
+	containerIndent := leadingSpaces(lineBody(lines[containerIndex]))
+	containerEnd := len(lines)
+	for i := containerIndex + 1; i < len(lines); i++ {
+		body := lineBody(lines[i])
+		trimmed := strings.TrimSpace(body)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "---") {
+			containerEnd = i
+			break
+		}
+		indent := leadingSpaces(body)
+		if indent <= containerIndent {
+			containerEnd = i
+			break
+		}
+	}
+
+	resourcesIndex := -1
+	resourcesIndent := -1
+	for i := containerIndex + 1; i < containerEnd; i++ {
+		body := lineBody(lines[i])
+		if strings.TrimSpace(body) == "resources:" {
+			resourcesIndex = i
+			resourcesIndent = leadingSpaces(body)
+			break
+		}
+	}
+	if resourcesIndex < 0 {
+		return "", fmt.Errorf("could not find resources for Kubernetes %s %q; add requests/limits before opening a PR", kubernetesManifestKind(wl), wl.Name)
+	}
+
+	var field, current, proposed, currentLimit, proposedLimit string
+	if rec.Resource == store.ResourceMemory {
+		field, current, proposed = "memory", mib(rec.CurrentValue), mib(rec.ProposedValue)
+		currentLimit, proposedLimit = mib(rec.CurrentLimit), mib(rec.ProposedLimit)
+	} else {
+		field, current, proposed = "cpu", milli(rec.CurrentValue), milli(rec.ProposedValue)
+		currentLimit, proposedLimit = milli(rec.CurrentLimit), milli(rec.ProposedLimit)
+	}
+	if err := patchKubernetesResourceGroup(lines, resourcesIndex, containerEnd, resourcesIndent, "requests", field, current, proposed, wl); err != nil {
+		return "", err
+	}
+	if err := patchKubernetesResourceGroup(lines, resourcesIndex, containerEnd, resourcesIndent, "limits", field, currentLimit, proposedLimit, wl); err != nil {
+		return "", err
+	}
+	return strings.Join(lines, ""), nil
+}
+
+func patchKubernetesResourceGroup(lines []string, resourcesIndex, containerEnd, resourcesIndent int, group, field, current, proposed string, wl store.Workload) error {
+	groupIndex := -1
+	groupIndent := -1
+	for i := resourcesIndex + 1; i < containerEnd; i++ {
+		body := lineBody(lines[i])
+		trimmed := strings.TrimSpace(body)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := leadingSpaces(body)
+		if indent <= resourcesIndent {
+			break
+		}
+		if trimmed == group+":" {
+			groupIndex = i
+			groupIndent = indent
+			break
+		}
+	}
+	if groupIndex < 0 {
+		return fmt.Errorf("could not find resources.%s for %s/%s; add the field before opening a PR", group, wl.Namespace, wl.Name)
+	}
+	for i := groupIndex + 1; i < containerEnd; i++ {
+		body := lineBody(lines[i])
+		trimmed := strings.TrimSpace(body)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := leadingSpaces(body)
+		if indent <= groupIndent {
+			break
+		}
+		if strings.HasPrefix(trimmed, field+":") {
+			next, err := replaceYAMLScalarLine(lines[i], field, current, proposed)
+			if err != nil {
+				return fmt.Errorf("refusing to patch resources.%s.%s for %s/%s: %w", group, field, wl.Namespace, wl.Name, err)
+			}
+			lines[i] = next
+			return nil
+		}
+	}
+	return fmt.Errorf("could not find resources.%s.%s for %s/%s; add the field before opening a PR", group, field, wl.Namespace, wl.Name)
+}
+
+func replaceYAMLScalarLine(line, field, current, proposed string) (string, error) {
+	ending := lineEnding(line)
+	body := lineBody(line)
+	indent := body[:leadingSpaces(body)]
+	trimmed := strings.TrimSpace(body)
+	if !strings.HasPrefix(trimmed, field+":") {
+		return "", fmt.Errorf("line does not contain %s", field)
+	}
+	rawValue := strings.TrimSpace(strings.TrimPrefix(trimmed, field+":"))
+	comment := ""
+	if value, suffix, ok := strings.Cut(rawValue, "#"); ok {
+		rawValue = strings.TrimSpace(value)
+		comment = " #" + suffix
+	}
+	quote := ""
+	value := rawValue
+	if len(value) >= 2 {
+		first, last := value[:1], value[len(value)-1:]
+		if (first == `"` && last == `"`) || (first == `'` && last == `'`) {
+			quote = first
+			value = value[1 : len(value)-1]
+		}
+	}
+	if value != current {
+		return "", fmt.Errorf("repo has %q but Consize expected %q", value, current)
+	}
+	return fmt.Sprintf("%s%s: %s%s%s%s", indent, field, quote, proposed, quote, comment) + ending, nil
+}
+
+func splitLinesPreservingEndings(s string) []string {
+	if s == "" {
+		return []string{}
+	}
+	lines := []string{}
+	start := 0
+	for i, r := range s {
+		if r == '\n' {
+			lines = append(lines, s[start:i+1])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		lines = append(lines, s[start:])
+	}
+	return lines
+}
+
+func lineBody(line string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+}
+
+func lineEnding(line string) string {
+	if strings.HasSuffix(line, "\r\n") {
+		return "\r\n"
+	}
+	if strings.HasSuffix(line, "\n") {
+		return "\n"
+	}
+	return ""
+}
+
+func leadingSpaces(s string) int {
+	return len(s) - len(strings.TrimLeft(s, " "))
+}
+
 func patchCostOpportunityTerraformContent(content string, opp store.CostOpportunity, kind, name string) (string, error) {
 	start, end := terraformResourceBlock(content, kind, name)
 	if start < 0 || end <= start {
@@ -393,6 +660,186 @@ func patchCostOpportunityTerraformContent(content string, opp store.CostOpportun
 # %s
 # Estimated savings: $%.2f/mo`, opp.Recommendation, opp.MonthlyCost)
 	return content[:start] + comment + "\n" + content[end:], nil
+}
+
+func decodeYAMLDocuments(content string) ([]yaml.Node, error) {
+	dec := yaml.NewDecoder(strings.NewReader(content))
+	var docs []yaml.Node
+	for {
+		var doc yaml.Node
+		err := dec.Decode(&doc)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("parse Kubernetes YAML: %w", err)
+		}
+		if yamlDocumentRoot(&doc) == nil {
+			continue
+		}
+		docs = append(docs, doc)
+	}
+	return docs, nil
+}
+
+func encodeYAMLDocuments(docs []yaml.Node) (string, error) {
+	parts := make([]string, 0, len(docs))
+	for i := range docs {
+		raw, err := yaml.Marshal(&docs[i])
+		if err != nil {
+			return "", fmt.Errorf("render Kubernetes YAML: %w", err)
+		}
+		parts = append(parts, strings.TrimSpace(string(raw)))
+	}
+	return strings.Join(parts, "\n---\n") + "\n", nil
+}
+
+func yamlDocumentRoot(doc *yaml.Node) *yaml.Node {
+	if doc == nil {
+		return nil
+	}
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		return doc.Content[0]
+	}
+	if doc.Kind == yaml.MappingNode {
+		return doc
+	}
+	return nil
+}
+
+func kubernetesDocumentMatches(root *yaml.Node, wl store.Workload) bool {
+	kind := strings.TrimSpace(mappingString(root, "kind"))
+	if !strings.EqualFold(kind, kubernetesManifestKind(wl)) {
+		return false
+	}
+	meta := mappingValue(root, "metadata")
+	if meta == nil {
+		return false
+	}
+	if mappingString(meta, "name") != wl.Name {
+		return false
+	}
+	ns := strings.TrimSpace(mappingString(meta, "namespace"))
+	return ns == "" || wl.Namespace == "" || ns == wl.Namespace
+}
+
+func selectWorkloadContainer(root *yaml.Node, rec store.Recommendation, wl store.Workload) (*yaml.Node, error) {
+	containers := containersNode(root, wl)
+	if containers == nil || containers.Kind != yaml.SequenceNode || len(containers.Content) == 0 {
+		return nil, fmt.Errorf("could not find containers for Kubernetes %s %q in the selected YAML file", kubernetesManifestKind(wl), wl.Name)
+	}
+	targetName := strings.TrimSpace(firstNonEmpty(wl.Labels["consize.dev/container"], wl.Labels["consize.io/container"], wl.Labels["container"]))
+	if targetName != "" {
+		for _, c := range containers.Content {
+			if mappingString(c, "name") == targetName {
+				return c, nil
+			}
+		}
+		return nil, fmt.Errorf("could not find container %q in Kubernetes %s %q", targetName, kubernetesManifestKind(wl), wl.Name)
+	}
+	for _, c := range containers.Content {
+		if mappingString(c, "name") == wl.Name || containerHasCurrentRecommendation(c, rec) {
+			return c, nil
+		}
+	}
+	if len(containers.Content) == 1 {
+		return containers.Content[0], nil
+	}
+	return nil, fmt.Errorf("the selected manifest has multiple containers; add a consize.dev/container label or use a manifest with one container so Consize can patch the right one")
+}
+
+func containersNode(root *yaml.Node, wl store.Workload) *yaml.Node {
+	if strings.EqualFold(kubernetesManifestKind(wl), "CronJob") {
+		return mappingAtPath(root, []string{"spec", "jobTemplate", "spec", "template", "spec", "containers"})
+	}
+	return mappingAtPath(root, []string{"spec", "template", "spec", "containers"})
+}
+
+func containerHasCurrentRecommendation(container *yaml.Node, rec store.Recommendation) bool {
+	resources := mappingValue(container, "resources")
+	if resources == nil {
+		return false
+	}
+	field := "cpu"
+	current := milli(rec.CurrentValue)
+	currentLimit := milli(rec.CurrentLimit)
+	if rec.Resource == store.ResourceMemory {
+		field = "memory"
+		current = mib(rec.CurrentValue)
+		currentLimit = mib(rec.CurrentLimit)
+	}
+	req := mappingAtPath(resources, []string{"requests", field})
+	lim := mappingAtPath(resources, []string{"limits", field})
+	return (req != nil && req.Value == current) || (lim != nil && lim.Value == currentLimit)
+}
+
+func setResourceQuantity(resources *yaml.Node, group, field, current, proposed string, wl store.Workload) error {
+	if proposed == "" || proposed == "0m" || proposed == "0Mi" {
+		return nil
+	}
+	groupNode := ensureMappingAtPath(resources, []string{group})
+	valueNode := mappingValue(groupNode, field)
+	if valueNode != nil {
+		if valueNode.Value != "" && current != "" && valueNode.Value != current {
+			return fmt.Errorf("refusing to patch %s.%s for %s/%s because the repo has %q but Consize expected %q", group, field, wl.Namespace, wl.Name, valueNode.Value, current)
+		}
+		valueNode.Kind = yaml.ScalarNode
+		valueNode.Tag = "!!str"
+		valueNode.Value = proposed
+		return nil
+	}
+	groupNode.Content = append(groupNode.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: field}, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: proposed})
+	return nil
+}
+
+func mappingAtPath(root *yaml.Node, path []string) *yaml.Node {
+	current := root
+	for _, key := range path {
+		current = mappingValue(current, key)
+		if current == nil {
+			return nil
+		}
+	}
+	return current
+}
+
+func ensureMappingAtPath(root *yaml.Node, path []string) *yaml.Node {
+	current := root
+	for _, key := range path {
+		next := mappingValue(current, key)
+		if next == nil {
+			next = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			current.Content = append(current.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, next)
+		}
+		if next.Kind != yaml.MappingNode {
+			next.Kind = yaml.MappingNode
+			next.Tag = "!!map"
+			next.Value = ""
+			next.Content = nil
+		}
+		current = next
+	}
+	return current
+}
+
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func mappingString(node *yaml.Node, key string) string {
+	child := mappingValue(node, key)
+	if child == nil {
+		return ""
+	}
+	return strings.TrimSpace(child.Value)
 }
 
 func terraformResourceFromDiff(diff string) (kind, name string, ok bool) {

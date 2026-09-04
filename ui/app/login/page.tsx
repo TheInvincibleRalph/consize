@@ -169,12 +169,6 @@ export default function LoginPage() {
             </button>
           </form>
         )}
-
-        {wizard && (
-          <div className="micro mt-6 text-center text-faint">
-            No accounts exist yet — the first account becomes the workspace admin
-          </div>
-        )}
       </div>
     </div>
   );

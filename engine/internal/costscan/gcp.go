@@ -90,6 +90,61 @@ func (s *GCPSource) Scan(ctx context.Context) ([]store.CostOpportunity, error) {
 	return out, nil
 }
 
+func (s *GCPSource) ApplyDirect(ctx context.Context, opp store.CostOpportunity, mode string) (DirectApplyResult, error) {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	if mode == "" {
+		mode = "dry_run"
+	}
+	res := DirectApplyResult{
+		OpportunityID: opp.ID,
+		Provider:      opp.Provider,
+		ResourceType:  opp.ResourceType,
+		ResourceID:    opp.ResourceID,
+		Name:          opp.Name,
+		Mode:          mode,
+	}
+	if !strings.EqualFold(opp.Provider, "gcp") {
+		return res, fmt.Errorf("direct cleanup only supports GCP opportunities in this build")
+	}
+	if opp.ResourceType != TypeUnattachedVolume || opp.Action != "delete_disk" {
+		return res, fmt.Errorf("direct cleanup for %s is not supported yet; open an IaC PR instead", humanType(opp.ResourceType))
+	}
+	project, zone, disk, err := parseDiskSelfLink(opp.ResourceID)
+	if err != nil {
+		return res, err
+	}
+	if project == "" {
+		project = s.project
+	}
+	if project == "" {
+		project = projectFromSAKey()
+	}
+	if project == "" {
+		return res, fmt.Errorf("GCP project is required for direct cleanup")
+	}
+	current, err := s.getDisk(ctx, project, zone, disk)
+	if err != nil {
+		return res, err
+	}
+	if !isUnattachedDisk(current) {
+		return res, fmt.Errorf("refusing direct cleanup: disk %s is no longer unattached (status=%s, attached_to_vms=%d)", disk, current.Status, len(current.Users))
+	}
+	res.Message = fmt.Sprintf("Disk %s/%s is detached and eligible for deletion.", zone, disk)
+	switch mode {
+	case "dry_run", "plan":
+		return res, nil
+	case "approved":
+	default:
+		return res, fmt.Errorf("mode must be dry_run or approved")
+	}
+	if err := s.deleteDisk(ctx, project, zone, disk); err != nil {
+		return res, err
+	}
+	res.Applied = true
+	res.Message = fmt.Sprintf("Deletion requested for disk %s/%s.", zone, disk)
+	return res, nil
+}
+
 type gcpServiceAccountKey struct {
 	ProjectID   string `json:"project_id"`
 	PrivateKey  string `json:"private_key"`
@@ -426,6 +481,23 @@ func (s *GCPSource) scanStoppedInstances(ctx context.Context) ([]store.CostOppor
 }
 
 func (s *GCPSource) get(ctx context.Context, path string, q url.Values) ([]byte, error) {
+	return s.do(ctx, http.MethodGet, path, q, nil)
+}
+
+func (s *GCPSource) delete(ctx context.Context, path string, q url.Values) ([]byte, error) {
+	return s.do(ctx, http.MethodDelete, path, q, nil)
+}
+
+func (s *GCPSource) do(ctx context.Context, method, path string, q url.Values, body io.Reader) ([]byte, error) {
+	if s.client == nil {
+		s.client = &http.Client{Timeout: 60 * time.Second}
+	}
+	if s.base == "" {
+		s.base = "https://compute.googleapis.com"
+	}
+	if s.tokenFunc == nil {
+		s.tokenFunc = s.tokenFromADC
+	}
 	tok, err := s.tokenFunc(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("token: %w", err)
@@ -434,7 +506,7 @@ func (s *GCPSource) get(ctx context.Context, path string, q url.Values) ([]byte,
 	if encoded := q.Encode(); encoded != "" {
 		u += "?" + encoded
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
 		return nil, err
 	}
@@ -444,11 +516,30 @@ func (s *GCPSource) get(ctx context.Context, path string, q url.Values) ([]byte,
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return nil, fmt.Errorf("status %s: %s", resp.Status, b)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+func (s *GCPSource) getDisk(ctx context.Context, project, zone, disk string) (gcpDisk, error) {
+	body, err := s.get(ctx, "/compute/v1/projects/"+url.PathEscape(project)+"/zones/"+url.PathEscape(zone)+"/disks/"+url.PathEscape(disk), nil)
+	if err != nil {
+		return gcpDisk{}, fmt.Errorf("get gcp disk %s/%s: %w", zone, disk, err)
+	}
+	var d gcpDisk
+	if err := json.Unmarshal(body, &d); err != nil {
+		return gcpDisk{}, fmt.Errorf("decode gcp disk %s/%s: %w", zone, disk, err)
+	}
+	return d, nil
+}
+
+func (s *GCPSource) deleteDisk(ctx context.Context, project, zone, disk string) error {
+	if _, err := s.delete(ctx, "/compute/v1/projects/"+url.PathEscape(project)+"/zones/"+url.PathEscape(zone)+"/disks/"+url.PathEscape(disk), nil); err != nil {
+		return fmt.Errorf("delete gcp disk %s/%s: %w", zone, disk, err)
+	}
+	return nil
 }
 
 func gcpDiskPriceGiBMonth(t string) float64 {
@@ -498,6 +589,38 @@ func terraformAddr(kind, name string) string {
 		safe = "resource"
 	}
 	return kind + "." + safe
+}
+
+func parseDiskSelfLink(raw string) (project, zone, disk string, err error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", "", fmt.Errorf("disk resource id is required")
+	}
+	parts := strings.Split(strings.Trim(raw, "/"), "/")
+	for i := 0; i < len(parts); i++ {
+		switch parts[i] {
+		case "projects":
+			if i+1 < len(parts) {
+				project = parts[i+1]
+			}
+		case "zones":
+			if i+1 < len(parts) {
+				zone = parts[i+1]
+			}
+		case "disks":
+			if i+1 < len(parts) {
+				disk = parts[i+1]
+			}
+		}
+	}
+	if zone == "" || disk == "" {
+		return "", "", "", fmt.Errorf("disk resource id must be a GCP disk selfLink containing /zones/{zone}/disks/{name}")
+	}
+	return project, zone, disk, nil
+}
+
+func humanType(t string) string {
+	return strings.ReplaceAll(t, "_", " ")
 }
 
 func nonEmpty(s, fallback string) string {

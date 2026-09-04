@@ -141,6 +141,155 @@ func TestRecommendationIaCPlanOpensGitHubPullRequestWhenTokenConfigured(t *testi
 	}
 }
 
+func TestRecommendationIaCPlanOpensGitHubPullRequestForKubernetesYAML(t *testing.T) {
+	var sawCreateRef, sawUpdateFile, sawPull bool
+	var updatedContent string
+	yamlContent := `---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: apps
+spec:
+  ports:
+  - port: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: apps
+spec:
+  template:
+    spec:
+      containers:
+      - name: api
+        image: ghcr.io/acme/api:1
+        resources:
+          requests:
+            cpu: "4000m"
+          limits:
+            cpu: "8000m"
+`
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/gitops/git/ref/heads/main":
+			writeTestJSON(w, map[string]any{"object": map[string]any{"sha": "base-sha"}})
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/acme/gitops/git/refs":
+			sawCreateRef = true
+			var body struct {
+				Ref string `json:"ref"`
+				SHA string `json:"sha"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(body.Ref, "refs/heads/consize/rightsize/apps-api-cpu") || body.SHA != "base-sha" {
+				t.Fatalf("bad create ref body: %+v", body)
+			}
+			w.WriteHeader(http.StatusCreated)
+			writeTestJSON(w, map[string]any{"ref": body.Ref})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/gitops/contents/apps/api/deployment.yaml":
+			if r.URL.Query().Get("ref") != "main" {
+				t.Fatalf("unexpected content ref %q", r.URL.Query().Get("ref"))
+			}
+			writeTestJSON(w, map[string]any{
+				"encoding": "base64",
+				"sha":      "file-sha",
+				"content":  base64.StdEncoding.EncodeToString([]byte(yamlContent)),
+			})
+		case r.Method == http.MethodPut && r.URL.Path == "/repos/acme/gitops/contents/apps/api/deployment.yaml":
+			sawUpdateFile = true
+			var body struct {
+				Content string `json:"content"`
+				SHA     string `json:"sha"`
+				Branch  string `json:"branch"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.SHA != "file-sha" || !strings.HasPrefix(body.Branch, "consize/rightsize/apps-api-cpu") {
+				t.Fatalf("bad update file body: %+v", body)
+			}
+			decoded, err := base64.StdEncoding.DecodeString(body.Content)
+			if err != nil {
+				t.Fatal(err)
+			}
+			updatedContent = string(decoded)
+			writeTestJSON(w, map[string]any{"content": map[string]any{"path": "apps/api/deployment.yaml"}})
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/acme/gitops/pulls":
+			sawPull = true
+			var body struct {
+				Title string `json:"title"`
+				Head  string `json:"head"`
+				Base  string `json:"base"`
+				Draft bool   `json:"draft"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(body.Title, "Rightsize apps/api cpu") || !strings.HasPrefix(body.Head, "consize/rightsize/apps-api-cpu") || body.Base != "main" || !body.Draft {
+				t.Fatalf("bad pull body: %+v", body)
+			}
+			w.WriteHeader(http.StatusCreated)
+			writeTestJSON(w, map[string]any{"html_url": "https://github.com/acme/gitops/pull/12"})
+		default:
+			t.Fatalf("unexpected github request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer gh.Close()
+
+	t.Setenv("CONSIZE_GITHUB_TOKEN", "test-token")
+	t.Setenv("CONSIZE_GITHUB_API_BASE", gh.URL)
+
+	h, st := newTestServer(t)
+	recID := seedPendingRec(t, st, "apps", nil)
+	rec := put(t, h, "/api/v1/integrations/github", map[string]any{
+		"enabled":      true,
+		"token_env":    "CONSIZE_GITHUB_TOKEN",
+		"default_repo": "acme/gitops",
+		"default_path": "apps/api/deployment.yaml",
+		"repositories": []map[string]any{
+			{
+				"repo":           "acme/gitops",
+				"default_branch": "main",
+			},
+		},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save integration: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = post(t, h, "/api/v1/recommendations/"+itoa(recID)+"/iac-pr", map[string]any{})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("open yaml pr: %d %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		PullRequest struct {
+			Provider string `json:"Provider"`
+			Status   string `json:"Status"`
+			URL      string `json:"URL"`
+		} `json:"pull_request"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.PullRequest.Provider != "kubernetes-yaml" || body.PullRequest.Status != "opened" || body.PullRequest.URL != "https://github.com/acme/gitops/pull/12" {
+		t.Fatalf("bad pull request response: %s", rec.Body.String())
+	}
+	if !sawCreateRef || !sawUpdateFile || !sawPull ||
+		!strings.Contains(updatedContent, `cpu: "1200m"`) ||
+		!strings.Contains(updatedContent, `cpu: "4000m"`) {
+		t.Fatalf("github yaml flow incomplete; ref=%v update=%v pull=%v content=%s", sawCreateRef, sawUpdateFile, sawPull, updatedContent)
+	}
+	if changedLineCount(yamlContent, updatedContent) != 2 {
+		t.Fatalf("yaml patch should preserve formatting and only change resource lines; changed lines=%d\n%s", changedLineCount(yamlContent, updatedContent), updatedContent)
+	}
+	if !strings.Contains(updatedContent, "---\napiVersion: v1") || !strings.Contains(updatedContent, "metadata:\n  name: api\n  namespace: apps") {
+		t.Fatalf("yaml patch re-rendered or damaged existing formatting:\n%s", updatedContent)
+	}
+}
+
 func TestRecommendationIaCPlanDoesNotCreateGitHubBranchWhenTerraformResourceMissing(t *testing.T) {
 	var sawCreateRef bool
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -289,6 +438,7 @@ func TestCostOpportunityIaCPlanOpensGitHubPullRequestWhenTokenConfigured(t *test
 
 	t.Setenv("CONSIZE_GITHUB_TOKEN", "test-token")
 	t.Setenv("CONSIZE_GITHUB_API_BASE", gh.URL)
+	t.Setenv("CONSIZE_COSTSCAN", "fixture")
 
 	h, _ := newTestServer(t)
 	rec := put(t, h, "/api/v1/integrations/github", map[string]any{
@@ -348,4 +498,27 @@ func writeTestJSON(w http.ResponseWriter, body any) {
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		panic(err)
 	}
+}
+
+func changedLineCount(before, after string) int {
+	a := strings.Split(before, "\n")
+	b := strings.Split(after, "\n")
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	var changed int
+	for i := 0; i < n; i++ {
+		var av, bv string
+		if i < len(a) {
+			av = a[i]
+		}
+		if i < len(b) {
+			bv = b[i]
+		}
+		if av != bv {
+			changed++
+		}
+	}
+	return changed
 }

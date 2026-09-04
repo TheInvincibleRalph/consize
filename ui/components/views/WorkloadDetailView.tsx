@@ -42,7 +42,7 @@ export default function WorkloadDetailView({ id }: { id: string }) {
     let alive = true;
     Promise.all([
       api.workload(id),
-      api.recommendations({ workload_id: id, status: "pending", limit: 10 }),
+      api.recommendations({ workload_id: id, status: "pending", limit: 50 }),
       api.applies({ workload_id: id }),
       api.verificationRuns(),
     ])
@@ -197,7 +197,13 @@ export default function WorkloadDetailView({ id }: { id: string }) {
             {applies.length} {applies.length === 1 ? "event" : "events"} for this workload
           </span>
         </div>
-        <ApplyTimeline applies={applies} runsByEvent={runsByEvent} />
+        <ApplyTimeline
+          applies={applies}
+          runsByEvent={runsByEvent}
+          pendingRecommendations={currentRecs}
+          canApply={canApply}
+          onContinue={setApplyRec}
+        />
       </div>
 
       {applyRec && (

@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   /* The browser stays same-origin: /api/v1/* is proxied to the Consize
    * API at dev/build time. Local dev defaults to the local API on :8080.
    * To inspect the live GKE install, opt in with

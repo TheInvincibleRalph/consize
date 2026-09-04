@@ -14,12 +14,18 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"consize/internal/auth"
+	"consize/internal/config"
 	"consize/internal/costscan"
 	"consize/internal/store"
 )
 
 func (s *Server) listCostOpportunities(w http.ResponseWriter, r *http.Request) {
 	opps, err := s.store.ListCostOpportunities(r.Context(), r.URL.Query().Get("status"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	actions, err := s.store.ListCostActions(r.Context(), nil)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -43,6 +49,7 @@ func (s *Server) listCostOpportunities(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"opportunities": opps,
+		"actions":       actions,
 		"latest_prs":    latest,
 		"summary": map[string]any{
 			"count":           len(opps),
@@ -52,7 +59,12 @@ func (s *Server) listCostOpportunities(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) scanCostOpportunities(w http.ResponseWriter, r *http.Request) {
-	opps, err := costscan.Service{Source: costscan.FixtureSource{}, Store: s.store}.Run(r.Context())
+	src, via, err := costscan.SourceFor(config.Str("CONSIZE_COSTSCAN", "none"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	opps, err := costscan.Service{Source: src, Store: s.store}.Run(r.Context())
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -67,8 +79,134 @@ func (s *Server) scanCostOpportunities(w http.ResponseWriter, r *http.Request) {
 			"count":           len(opps),
 			"monthly_savings": total,
 		},
-		"source": "fixture",
+		"source": via,
 	})
+}
+
+func (s *Server) applyCostOpportunity(w http.ResponseWriter, r *http.Request) {
+	id, err := parseCostOpportunityID(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cost opportunity id must be a positive integer"})
+		return
+	}
+	var body struct {
+		Mode  string `json:"mode"`
+		Actor string `json:"actor"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body must be {\"mode\": \"dry_run|approved\", \"actor\": \"...\"}"})
+		return
+	}
+	opp, err := s.store.GetCostOpportunity(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "cost opportunity not found"})
+			return
+		}
+		writeErr(w, err)
+		return
+	}
+	if opp.Status != store.OpportunityOpen && opp.Status != store.OpportunityPRReady {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "cost opportunity is not open"})
+		return
+	}
+	actor := strings.TrimSpace(body.Actor)
+	if s.authSvc != nil {
+		u, ok := auth.UserFromContext(r.Context())
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		actor = "api:" + u.Email
+	}
+	if actor == "" {
+		actor = "operator"
+	}
+	mode := strings.TrimSpace(strings.ToLower(body.Mode))
+	if mode == "" {
+		mode = "dry_run"
+	}
+	if _, err := s.store.CreateCostAction(r.Context(), store.CostAction{
+		OpportunityID: opp.ID,
+		Actor:         actor,
+		Mode:          mode,
+		Result:        store.CostActionRequested,
+		Message:       fmt.Sprintf("Requested direct cleanup for %s.", displayName(opp)),
+		Evidence: map[string]any{
+			"provider":      opp.Provider,
+			"account":       opp.Account,
+			"region":        opp.Region,
+			"resource_type": opp.ResourceType,
+			"resource_id":   opp.ResourceID,
+			"action":        opp.Action,
+		},
+	}); err != nil {
+		writeErr(w, err)
+		return
+	}
+	applier, err := costscan.DirectApplierFor(opp.Provider)
+	if err != nil {
+		_, _ = s.store.CreateCostAction(r.Context(), store.CostAction{
+			OpportunityID: opp.ID,
+			Actor:         actor,
+			Mode:          mode,
+			Result:        store.CostActionFailed,
+			Message:       err.Error(),
+			Evidence: map[string]any{
+				"provider":      opp.Provider,
+				"resource_type": opp.ResourceType,
+				"resource_id":   opp.ResourceID,
+			},
+		})
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	res, err := applier.ApplyDirect(r.Context(), opp, mode)
+	if err != nil {
+		_, _ = s.store.CreateCostAction(r.Context(), store.CostAction{
+			OpportunityID: opp.ID,
+			Actor:         actor,
+			Mode:          mode,
+			Result:        store.CostActionFailed,
+			Message:       err.Error(),
+			Evidence: map[string]any{
+				"provider":      opp.Provider,
+				"resource_type": opp.ResourceType,
+				"resource_id":   opp.ResourceID,
+			},
+		})
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	result := store.CostActionDryRun
+	if res.Applied {
+		result = store.CostActionApplied
+	}
+	if _, err := s.store.CreateCostAction(r.Context(), store.CostAction{
+		OpportunityID: opp.ID,
+		Actor:         actor,
+		Mode:          mode,
+		Result:        result,
+		Message:       res.Message,
+		Evidence: map[string]any{
+			"provider":      res.Provider,
+			"resource_type": res.ResourceType,
+			"resource_id":   res.ResourceID,
+			"name":          res.Name,
+			"applied":       res.Applied,
+		},
+	}); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if res.Applied {
+		if err := s.store.SetCostOpportunityStatus(r.Context(), id, store.OpportunityResolved); err != nil {
+			writeErr(w, err)
+			return
+		}
+		opp.Status = store.OpportunityResolved
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"result": res, "opportunity": opp, "actor": actor})
 }
 
 func (s *Server) prepareIaCPullRequest(w http.ResponseWriter, r *http.Request) {
@@ -192,7 +330,7 @@ func (s *Server) prepareRecommendationIaCPullRequest(w http.ResponseWriter, r *h
 	if path == "" {
 		path = defaultRecommendationIaCPath(wl)
 	}
-	if err := validateTerraformFilePath(path); err != nil {
+	if err := validateIaCFilePath(path); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -244,7 +382,11 @@ func (s *Server) resolveCostOpportunityIaCTarget(ctx context.Context, opp store.
 	selectedRepo := firstNonEmpty(repo, opp.IaCRepo, cfg.DefaultRepo, firstGitHubRepo(cfg))
 	resolvedRepo, rootPath := resolveGitHubRepo(cfg, selectedRepo)
 	resolvedRepo = firstNonEmpty(resolvedRepo, selectedRepo)
-	resolvedPath = repoScopedPath(rootPath, firstNonEmpty(opp.IaCPath, cfg.DefaultPath, "terraform/main.tf"))
+	defaultPath := "terraform/main.tf"
+	if isTerraformFilePath(cfg.DefaultPath) {
+		defaultPath = cfg.DefaultPath
+	}
+	resolvedPath = repoScopedPath(rootPath, firstNonEmpty(opp.IaCPath, defaultPath))
 	return resolvedRepo, resolvedPath, cfg, nil
 }
 
@@ -309,32 +451,34 @@ func buildRecommendationIaCPlan(rec store.Recommendation, wl store.Workload, rep
 	}
 	branch := fmt.Sprintf("consize/rightsize/%s-%s-%s", safeSlug(wl.Namespace), safeSlug(wl.Name), safeSlug(rec.Resource))
 	title := fmt.Sprintf("Rightsize %s/%s %s", wl.Namespace, wl.Name, rec.Resource)
-	diff := recommendationTerraformDiff(rec, wl, path, addr)
+	provider := iacProviderForPath(path)
+	diff := recommendationIaCDiff(rec, wl, path, addr, provider)
 	body := fmt.Sprintf(`## Summary
 
-Consize recommends changing infrastructure through Terraform instead of directly patching the live runtime. This avoids configuration drift for teams whose source of truth is IaC.
+Consize recommends changing this through the team's source repository instead of directly patching the live runtime. This avoids configuration drift when infrastructure or workloads are managed as code.
 
 - Workload: %s/%s
 - Kind: %s
 - Resource: %s
 - Change: %s
 - Estimated savings: $%.2f/mo
+- Source type: %s
 
 ## Delivery choice
 
-Use this PR plan when the team manages this resource with Terraform. Direct apply remains available for non-IaC workloads or break-glass convenience, but the PR path should be preferred for managed infrastructure.
+Use this PR path when the team manages this resource with Terraform, Kubernetes YAML, Helm values, Kustomize, or another GitOps source. Direct apply remains available for non-IaC workloads or break-glass convenience.
 
 ## Review notes
 
-- Confirm the Terraform address and file path before opening the PR.
+- Confirm the source file and resource target before opening the PR.
 - Merge through the team's normal review process.
 - Let the next Consize collection/analyze cycle verify that live state and desired state converge.
-`, wl.Namespace, wl.Name, wl.Kind, rec.Resource, recommendationChange(rec), rec.SavingsMonthly)
+`, wl.Namespace, wl.Name, wl.Kind, rec.Resource, recommendationChange(rec), rec.SavingsMonthly, humanIaCProvider(provider))
 	return store.IaCPullRequest{
 		RecommendationID: rec.ID,
 		ChangeKind:       store.IaCChangeKindRecommendation,
 		Actor:            actor,
-		Provider:         "terraform",
+		Provider:         provider,
 		Repo:             repo,
 		Branch:           branch,
 		Title:            title,
@@ -366,13 +510,24 @@ func normalizeRecommendationIaCInput(repo, path, addr string) (string, string, s
 	return repo, strings.TrimLeft(path, "/"), addr
 }
 
+func validateIaCFilePath(path string) error {
+	path = cleanRepoPath(path)
+	if path == "" {
+		return fmt.Errorf("source file path is required")
+	}
+	if !isSupportedIaCFilePath(path) {
+		return fmt.Errorf("source file path must point to a supported IaC file (.tf, .tf.json, .yaml, or .yml), not a directory. Examples: infra/terraform/workloads.tf or kubernetes/apps/deployment.yaml")
+	}
+	return nil
+}
+
 func validateTerraformFilePath(path string) error {
 	path = cleanRepoPath(path)
 	if path == "" {
 		return fmt.Errorf("Terraform file path is required")
 	}
 	if !isTerraformFilePath(path) {
-		return fmt.Errorf("Terraform file path must point to a .tf or .tf.json file, not a directory. Example: infra/terraform/workloads.tf")
+		return fmt.Errorf("cloud waste cleanup currently needs a Terraform source file (.tf or .tf.json), not a directory or Kubernetes manifest")
 	}
 	return nil
 }
@@ -380,6 +535,52 @@ func validateTerraformFilePath(path string) error {
 func isTerraformFilePath(path string) bool {
 	path = strings.ToLower(cleanRepoPath(path))
 	return strings.HasSuffix(path, ".tf") || strings.HasSuffix(path, ".tf.json")
+}
+
+func isYAMLFilePath(path string) bool {
+	path = strings.ToLower(cleanRepoPath(path))
+	return strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml")
+}
+
+func isSupportedIaCFilePath(path string) bool {
+	return isTerraformFilePath(path) || isYAMLFilePath(path)
+}
+
+func iacProviderForPath(path string) string {
+	path = strings.ToLower(cleanRepoPath(path))
+	if strings.Contains(path, "values.") && isYAMLFilePath(path) {
+		return "helm-values"
+	}
+	if isYAMLFilePath(path) {
+		return "kubernetes-yaml"
+	}
+	return "terraform"
+}
+
+func humanIaCProvider(provider string) string {
+	switch provider {
+	case "kubernetes-yaml":
+		return "Kubernetes YAML"
+	case "helm-values":
+		return "Helm values"
+	default:
+		return "Terraform"
+	}
+}
+
+func kubernetesManifestKind(wl store.Workload) string {
+	switch strings.ToLower(strings.TrimSpace(wl.Kind)) {
+	case "statefulset", "statefulsets":
+		return "StatefulSet"
+	case "daemonset", "daemonsets":
+		return "DaemonSet"
+	case "job", "jobs":
+		return "Job"
+	case "cronjob", "cronjobs":
+		return "CronJob"
+	default:
+		return "Deployment"
+	}
 }
 
 func looksLikeURL(v string) bool {
@@ -462,6 +663,92 @@ func recommendationTerraformDiff(rec store.Recommendation, wl store.Workload, pa
  }
 `, path, path, path, path, kind, name, milli(rec.CurrentValue), milli(rec.CurrentLimit), milli(rec.ProposedValue), milli(rec.ProposedLimit))
 	}
+}
+
+func recommendationIaCDiff(rec store.Recommendation, wl store.Workload, path, addr, provider string) string {
+	switch provider {
+	case "kubernetes-yaml":
+		return recommendationKubernetesYAMLDiff(rec, wl, path)
+	case "helm-values":
+		return recommendationHelmValuesDiff(rec, wl, path)
+	default:
+		return recommendationTerraformDiff(rec, wl, path, addr)
+	}
+}
+
+func recommendationKubernetesYAMLDiff(rec store.Recommendation, wl store.Workload, path string) string {
+	kind := kubernetesManifestKind(wl)
+	if rec.Resource == store.ResourceMemory {
+		return fmt.Sprintf(`diff --git a/%s b/%s
+--- a/%s
++++ b/%s
+@@
+ kind: %s
+ metadata:
+   name: %s
+ spec:
+   template:
+     spec:
+       containers:
+       - resources:
+           requests:
+-            memory: %q
++            memory: %q
+           limits:
+-            memory: %q
++            memory: %q
+`, path, path, path, path, kind, wl.Name, mib(rec.CurrentValue), mib(rec.ProposedValue), mib(rec.CurrentLimit), mib(rec.ProposedLimit))
+	}
+	return fmt.Sprintf(`diff --git a/%s b/%s
+--- a/%s
++++ b/%s
+@@
+ kind: %s
+ metadata:
+   name: %s
+ spec:
+   template:
+     spec:
+       containers:
+       - resources:
+           requests:
+-            cpu: %q
++            cpu: %q
+           limits:
+-            cpu: %q
++            cpu: %q
+`, path, path, path, path, kind, wl.Name, milli(rec.CurrentValue), milli(rec.ProposedValue), milli(rec.CurrentLimit), milli(rec.ProposedLimit))
+}
+
+func recommendationHelmValuesDiff(rec store.Recommendation, wl store.Workload, path string) string {
+	if rec.Resource == store.ResourceMemory {
+		return fmt.Sprintf(`diff --git a/%s b/%s
+--- a/%s
++++ b/%s
+@@
+ # Helm values target: %s/%s
+ resources:
+   requests:
+-    memory: %q
++    memory: %q
+   limits:
+-    memory: %q
++    memory: %q
+`, path, path, path, path, wl.Namespace, wl.Name, mib(rec.CurrentValue), mib(rec.ProposedValue), mib(rec.CurrentLimit), mib(rec.ProposedLimit))
+	}
+	return fmt.Sprintf(`diff --git a/%s b/%s
+--- a/%s
++++ b/%s
+@@
+ # Helm values target: %s/%s
+ resources:
+   requests:
+-    cpu: %q
++    cpu: %q
+   limits:
+-    cpu: %q
++    cpu: %q
+`, path, path, path, path, wl.Namespace, wl.Name, milli(rec.CurrentValue), milli(rec.ProposedValue), milli(rec.CurrentLimit), milli(rec.ProposedLimit))
 }
 
 func recommendationChange(rec store.Recommendation) string {

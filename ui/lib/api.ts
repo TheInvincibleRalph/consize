@@ -18,6 +18,7 @@ import type {
   ApplyResult,
   ByOwnerRaw,
   CostOpportunitiesResponse,
+  CostApplyResponse,
   CostScanResponse,
   GitHubIntegrationConfig,
   GitHubIntegrationResponse,
@@ -248,6 +249,7 @@ export const api = {
     const body = await request<CostOpportunitiesResponse>("/cost-opportunities", { status });
     return {
       opportunities: Array.isArray(body?.opportunities) ? body.opportunities : [],
+      actions: Array.isArray(body?.actions) ? body.actions : [],
       latest_prs: body?.latest_prs || {},
       summary: body?.summary || { count: 0, monthly_savings: 0 },
     };
@@ -259,6 +261,10 @@ export const api = {
 
   prepareIaCPullRequest(id: string | number, repo?: string): Promise<IaCPullRequestResponse> {
     return post<IaCPullRequestResponse>(`/cost-opportunities/${id}/iac-pr`, { repo });
+  },
+
+  applyCostOpportunity(id: string | number, mode: "dry_run" | "approved" = "approved"): Promise<CostApplyResponse> {
+    return post<CostApplyResponse>(`/cost-opportunities/${id}/apply`, { mode });
   },
 
   prepareRecommendationIaCPullRequest(

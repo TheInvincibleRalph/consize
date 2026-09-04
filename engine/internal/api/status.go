@@ -9,7 +9,7 @@ import (
 
 const (
 	defaultDataStaleAfter = 2 * time.Hour
-	defaultVerifyWindow   = 24 * time.Hour
+	defaultVerifyWindow   = time.Hour
 )
 
 type systemStatusResponse struct {
@@ -101,7 +101,7 @@ func (s *Server) systemStatus(w http.ResponseWriter, r *http.Request) {
 		if e.CreatedAt.IsZero() {
 			continue
 		}
-		dueAt := e.CreatedAt.Add(verifyWindow)
+		dueAt := e.CreatedAt.Add(config.StepScaledDuration(verifyWindow, e.StepNumber))
 		if out.NextVerificationDueAt == nil || dueAt.Before(*out.NextVerificationDueAt) {
 			next := dueAt
 			out.NextVerificationDueAt = &next

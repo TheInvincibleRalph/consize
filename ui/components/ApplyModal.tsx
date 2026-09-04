@@ -31,7 +31,7 @@ export function ApplyModal({
   const [actor, setActor] = React.useState("");
   const [repo, setRepo] = React.useState("");
   const [path, setPath] = React.useState("");
-  const [terraformAddr, setTerraformAddr] = React.useState("");
+  const [resourceTarget, setResourceTarget] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const [outcome, setOutcome] = React.useState<React.ReactNode>(null);
@@ -56,7 +56,7 @@ export function ApplyModal({
       
       const a = actor.trim();
       if (!a) {
-        setOutcome(<p className="err">approved mode requires an actor</p>);
+        setOutcome(<p className="err">Approved mode requires an actor.</p>);
         return;
       }
       payload.actor = a;
@@ -79,10 +79,11 @@ export function ApplyModal({
   function preparePRPlan() {
     const repoValue = repo.trim();
     const pathValue = path.trim();
+    const terraformTarget = resourceTarget.trim();
     const payload: { repo?: string; path?: string; terraform_addr?: string; actor?: string } = {
       repo: repoValue || (looksLikeURL(pathValue) ? pathValue : undefined),
       path: pathValue && !looksLikeURL(pathValue) ? pathValue : undefined,
-      terraform_addr: terraformAddr.trim() || undefined,
+      terraform_addr: shouldSendTerraformTarget(pathValue) && terraformTarget ? terraformTarget : undefined,
     };
     if (!authEnabled) {
       const a = actor.trim();
@@ -90,7 +91,7 @@ export function ApplyModal({
     }
     setBusy(true);
     setCopied(false);
-    setOutcome(<p className="muted-text">Preparing Terraform PR plan…</p>);
+    setOutcome(<p className="muted-text">Opening IaC pull request…</p>);
     api
       .prepareRecommendationIaCPullRequest(rec.ID, payload)
       .then((body) => {
@@ -107,58 +108,61 @@ export function ApplyModal({
   function applyOutcome(b: ApplyResult) {
     const parts: React.ReactNode[] = [];
     if (b.Blocked) {
-      parts.push(blockedBox("Apply blocked", b.BlockReasons));
+      parts.push(blockedBox("Apply blocked", b.BlockReasons, "blocked"));
     } else {
       // Step plan: "step 1 of 4 — medium" (short class family for class
-      
+      // recommendations).
       if (b.StepNumber || b.TotalSteps) {
         let text = `Step ${b.StepNumber} of ${b.TotalSteps}`;
         if (b.Diff?.resource === "class" && b.Diff.proposed_class) {
           text += ` — ${shortClass(b.Diff.proposed_class)}`;
         }
-        parts.push(<p className="plan">{text}</p>);
+        parts.push(<p className="plan" key="step-plan">{text}</p>);
       }
-      if (b.Diff?.resource) parts.push(<p className="change">{diffLine(b.Diff as ApplyDiff)}</p>);
+      if (b.Diff?.resource) parts.push(<p className="change" key="diff">{diffLine(b.Diff as ApplyDiff)}</p>);
       // Maintenance-window state (DB engine only).
       if (b.InWindow !== undefined) {
         parts.push(
-          <p className={`window ${b.InWindow ? "in" : "out"}`}>
+          <p className={`window ${b.InWindow ? "in" : "out"}`} key="maintenance-window">
             {b.InWindow ? "In maintenance window" : "Outside maintenance window"}
             {b.Window ? ` (${b.Window})` : ""}
           </p>,
         );
       }
-      if (b.DryRun) parts.push(<p className="ok">Dry run — nothing was changed.</p>);
-      if (b.Applied) parts.push(<p className="ok">Applied.</p>);
-      if (b.FollowUpID > 0) {
+      if (b.DryRun) parts.push(<p className="ok" key="dry-run">Dry run — nothing was changed.</p>);
+      if (b.Applied) {
         parts.push(
-          <p className="ok">Follow-up queued (#{b.FollowUpID}) — the next step continues in turn.</p>,
+          <p className="ok" key="applied">
+            Applied. Consize will verify this change automatically before the next step.
+          </p>,
         );
       }
-      if (!parts.length) parts.push(<p className="muted-text">Done — no details returned.</p>);
+      if (!parts.length) parts.push(<p className="muted-text" key="done">Done — no details returned.</p>);
     }
     return <div className="flex flex-col gap-1.5">{parts}</div>;
   }
 
   function applyError(e: unknown) {
     if (e instanceof ApiError && e.status === 422) {
-      // {"error":"apply blocked","reasons":[...]} — reasons verbatim.
       const body = e.body as { error?: string; reasons?: unknown };
       return blockedBox("Apply blocked", body?.reasons);
     }
     const body = (e instanceof ApiError && (e.body as { error?: string })) || null;
-    return <p className="err">{body?.error || String((e as Error)?.message || e)}</p>;
+    return <p className="err">{formatErrorMessage(body?.error || String((e as Error)?.message || e))}</p>;
   }
 
-  function blockedBox(title: string, reasons: unknown) {
-    const list = Array.isArray(reasons)
-      ? reasons.map((r, i) => <li key={i}>{String(r)}</li>)
-      : [];
+  function blockedBox(title: string, reasons: unknown, key?: React.Key) {
+    const list = Array.isArray(reasons) ? reasons.map((r) => formatGuardrailReason(String(r))) : [];
+    const normalizedTitle = list.length === 1 && list[0].title ? list[0].title : title;
     return (
-      <div className="blocked">
-        <p className="blocked-title">{title}</p>
+      <div className="blocked" key={key}>
+        <p className="blocked-title">{normalizedTitle}</p>
         {list.length ? (
-          <ul className="reasons">{list}</ul>
+          <div className="reasons">
+            {list.map((reason, i) => (
+              <p key={i}>{reason.message}</p>
+            ))}
+          </div>
         ) : (
           <p className="muted-text">No reasons given.</p>
         )}
@@ -172,7 +176,7 @@ export function ApplyModal({
       <div className="pr-plan-result">
         <div className="pr-plan-actions">
           <p className={opened ? "ok" : pr.Status === "failed" ? "err" : "ok"}>
-            {opened ? "Terraform PR opened." : pr.Status === "failed" ? "Terraform PR failed." : "Terraform PR plan prepared."}
+            {opened ? "IaC PR opened." : pr.Status === "failed" ? "IaC PR failed." : "IaC PR plan prepared."}
           </p>
           <button
             className="btn small"
@@ -213,7 +217,9 @@ export function ApplyModal({
   }
 
   const isDB = rec.Resource === "class";
-  const defaultTerraformResource = defaultRecommendationTerraformAddr(rec);
+  const defaultResourceTarget = defaultRecommendationResourceTarget(rec);
+  const sourceKind = sourcePathKind(path);
+  const showResourceTarget = sourceKind !== "yaml" && sourceKind !== "helm-values";
 
   return (
     <div
@@ -222,9 +228,9 @@ export function ApplyModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="modal" role="dialog" aria-modal="true" aria-label={`Apply recommendation #${rec.ID}`}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Apply recommendation">
         <div className="modal-head">
-          <h2>Apply recommendation #{rec.ID}</h2>
+          <h2>Apply recommendation</h2>
           <p>
             {rec.WorkloadName} · {rec.Namespace} · {rec.Resource}
           </p>
@@ -259,8 +265,8 @@ export function ApplyModal({
             }}
           >
             <GitPullRequest size={16} />
-            <span>Open Terraform PR</span>
-            <small>Create a reviewable IaC change.</small>
+            <span>Open IaC PR</span>
+            <small>Create a reviewable source change.</small>
           </button>
         </div>
 
@@ -299,45 +305,51 @@ export function ApplyModal({
         ) : (
           <div className="iac-fields">
             <label className="field">
-              Git repository
+              Repository override
               <input
                 className="text"
                 type="text"
-                placeholder="platform/infra-live"
+                placeholder="Leave blank to use saved default"
                 value={repo}
                 onChange={(e) => setRepo(e.target.value)}
               />
-              <span className="field-hint">Leave blank to use the saved GitHub defaults.</span>
+              <span className="field-hint">Use only when this recommendation should target a different configured repo or alias.</span>
             </label>
             <details className="advanced-fields">
               <summary>Advanced target</summary>
               <div className="iac-fields nested">
                 <label className="field">
-                  Terraform file path
+                  Source file path
                   <input
                     className="text"
                     type="text"
-                    placeholder={isDB ? "terraform/databases.tf" : "terraform/workloads.tf"}
+                    placeholder={isDB ? "terraform/databases.tf" : "kubernetes/apps/deployment.yaml"}
                     value={path}
                     onChange={(e) => setPath(e.target.value)}
                   />
                   <span className="field-hint">
-                    Use the file that contains the workload resource. If the repo has a root path like infra/terraform, enter the file under it, e.g. main.tf.
+                    Use the file that owns the workload: Terraform `.tf`, Kubernetes `.yaml`, or Helm `values.yaml`.
                   </span>
                 </label>
-                <label className="field">
-                  Terraform resource address
-                  <input
-                    className="text"
-                    type="text"
-                    placeholder={defaultTerraformResource}
-                    value={terraformAddr}
-                    onChange={(e) => setTerraformAddr(e.target.value)}
-                  />
-                  <span className="field-hint">
-                    Leave blank to use {defaultTerraformResource}. Override this if your Terraform block has a different name.
-                  </span>
-                </label>
+                {showResourceTarget ? (
+                  <label className="field">
+                    Terraform resource
+                    <input
+                      className="text"
+                      type="text"
+                      placeholder={defaultResourceTarget}
+                      value={resourceTarget}
+                      onChange={(e) => setResourceTarget(e.target.value)}
+                    />
+                    <span className="field-hint">
+                      Optional. Use the Terraform address that owns this workload, for example {defaultResourceTarget}.
+                    </span>
+                  </label>
+                ) : (
+                  <div className="field-note">
+                    YAML target: Consize matches the workload by kind, name, namespace, and container metadata.
+                  </div>
+                )}
               </div>
             </details>
             {!authEnabled && (
@@ -370,12 +382,57 @@ export function ApplyModal({
   );
 }
 
+function formatGuardrailReason(raw: string): { title?: string; message: string } {
+  const statusMatch = raw.match(/^recommendation status is "([^"]+)", not pending$/i);
+  if (statusMatch) {
+    const status = statusMatch[1];
+    if (status === "applied") {
+      return {
+        title: "Already applied",
+        message:
+          "This recommendation has already been applied. Refresh the list or review the workload history for its verification status.",
+      };
+    }
+    if (status === "superseded") {
+      return {
+        title: "Recommendation no longer current",
+        message: "A newer recommendation replaced this one. Refresh the list and apply the current recommendation instead.",
+      };
+    }
+    return {
+      title: "Recommendation unavailable",
+      message: `This recommendation is ${status}. Only pending recommendations can be applied.`,
+    };
+  }
+  return { message: formatErrorMessage(raw) };
+}
+
+function formatErrorMessage(raw: string): string {
+  const text = raw.trim();
+  if (!text) return "Something went wrong.";
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}${/[.!?]$/.test(text) ? "" : "."}`;
+}
+
 function looksLikeURL(value: string): boolean {
   const v = value.trim().toLowerCase();
   return v.startsWith("http://") || v.startsWith("https://") || v.startsWith("git@");
 }
 
-function defaultRecommendationTerraformAddr(rec: Recommendation): string {
+function sourcePathKind(value: string): "terraform" | "yaml" | "helm-values" | "unknown" {
+  const v = value.trim().toLowerCase();
+  if (!v) return "unknown";
+  if (v.endsWith(".tf") || v.endsWith(".tf.json")) return "terraform";
+  if ((v.endsWith(".yaml") || v.endsWith(".yml")) && v.includes("values.")) return "helm-values";
+  if (v.endsWith(".yaml") || v.endsWith(".yml")) return "yaml";
+  return "unknown";
+}
+
+function shouldSendTerraformTarget(path: string): boolean {
+  const kind = sourcePathKind(path);
+  return kind === "terraform" || kind === "unknown";
+}
+
+function defaultRecommendationResourceTarget(rec: Recommendation): string {
   const name = safeTerraformName(rec.WorkloadName);
   if (rec.Resource === "class") return `google_sql_database_instance.${name}`;
   return `kubernetes_deployment.${name}`;

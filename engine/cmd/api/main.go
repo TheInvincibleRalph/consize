@@ -40,14 +40,20 @@ func main() {
 	}
 
 	// The apply engine needs a WRITE cluster identity (docs/security.md).
-	// Absent one (dev/demo without a cluster), serve read-only: apply
-	// endpoints answer 503 instead of failing at startup.
+	// CONSIZE_DEMO_PATCHER=true wires the DemoPatcher instead, so the
+	// full safety engine (guardrails, step logic, audit trail, rollback)
+	// works end-to-end without a real cluster — for the demo sandbox.
 	var applier *apply.Service
-	patcher, err := apply.NewK8sPatcher(config.Str("KUBECONFIG", ""))
-	if err != nil {
-		log.Printf("no cluster write identity (%v) — apply endpoints disabled (503)", err)
+	if config.Bool("CONSIZE_DEMO_PATCHER", false) {
+		log.Printf("CONSIZE_DEMO_PATCHER=true — using in-memory demo patcher (no cluster required)")
+		applier = apply.NewService(st, apply.NewDemoPatcher(), apply.DefaultConfig())
 	} else {
-		applier = apply.NewService(st, patcher, apply.DefaultConfig())
+		patcher, err := apply.NewK8sPatcher(config.Str("KUBECONFIG", ""))
+		if err != nil {
+			log.Printf("no cluster write identity (%v) — apply endpoints disabled (503)", err)
+		} else {
+			applier = apply.NewService(st, patcher, apply.DefaultConfig())
+		}
 	}
 
 	// Database class changes route to the DB engine. The provider seam

@@ -337,12 +337,12 @@ func TestAlertingConfigAuthorizationAndValidation(t *testing.T) {
 	withSecret := map[string]any{
 		"default_contact_point": "bad",
 		"contact_points": []map[string]any{{
-				"name": "bad",
-				"integrations": []map[string]any{{
-					"type":        "slack",
-					"webhook_url": "https://hooks.slack.com" + "/services" + "/raw-secret",
-				}},
+			"name": "bad",
+			"integrations": []map[string]any{{
+				"type":        "slack",
+				"webhook_url": "https://hooks.slack.com" + "/services" + "/raw-secret",
 			}},
+		}},
 		"notification_policies": []map[string]any{{
 			"name":          "bad",
 			"contact_point": "bad",
@@ -390,6 +390,7 @@ func TestReportConfigAuthorizationAndDownload(t *testing.T) {
 }
 
 func TestCostOpportunityAuthorization(t *testing.T) {
+	t.Setenv("CONSIZE_COSTSCAN", "fixture")
 	h, _, _, authSvc := newAuthApplyServer(t)
 	addUser(t, authSvc, "view@example.com", "v-pass", store.RoleViewer)
 	addUser(t, authSvc, "op@example.com", "o-pass", store.RoleOperator)

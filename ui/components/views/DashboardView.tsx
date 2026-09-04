@@ -15,6 +15,7 @@ import {
 import { api, ApiError, pick } from "@/lib/api";
 import type {
   ApplyEvent,
+  Recommendation,
   SavingsResponse,
   SeriesResponse,
   SystemStatusResponse,
@@ -30,10 +31,14 @@ import {
   resultPill,
   verdictPill,
 } from "@/components/ui";
+import { ApplyModal } from "@/components/ApplyModal";
+import { continuationFor } from "@/components/ApplyTimeline";
+import { useAuth } from "@/components/auth";
 
 type DashboardReadyState = {
   phase: "ready";
   workloads: Workload[];
+  pendingRecommendations: Recommendation[];
   applies: ApplyEvent[];
   runs: VerificationRun[];
   savings: SavingsResponse;
@@ -79,8 +84,8 @@ function plural(n: number, one: string, many = `${one}s`): string {
 }
 
 function pipelineTitle(status: SystemStatusResponse): string {
-  if (status.verification_due > 0) return "Safety check due";
-  if (status.in_flight_applies > 0) return "Safety check queued";
+  if (status.verification_due > 0) return "Safety check ready";
+  if (status.in_flight_applies > 0) return "Safety check scheduled";
   if (status.status === "healthy") return "System healthy";
   if (status.status === "empty") return "Waiting for first collection";
   if (status.status === "unavailable") return "Consize unavailable";
@@ -89,11 +94,13 @@ function pipelineTitle(status: SystemStatusResponse): string {
 
 function safetyMessage(status: SystemStatusResponse, latest: string): string {
   if (status.verification_due > 0) {
-    return `${plural(status.verification_due, "applied change")} ready for automatic safety verification.`;
+    return `${plural(status.verification_due, "applied change")} ready for verification. Consize will run the safety check automatically within about a minute.`;
   }
   if (status.in_flight_applies > 0) {
-    const nextDue = status.next_verification_due_at ? ` Eligible at ${fmtTime(status.next_verification_due_at)}.` : "";
-    return `${plural(status.in_flight_applies, "applied change")} waiting for the ${durationLabel(status.verify_window_seconds)} observation window.${nextDue}`;
+    const nextDue = status.next_verification_due_at
+      ? ` Next verification opens at ${fmtTime(status.next_verification_due_at)}.`
+      : "";
+    return `${plural(status.in_flight_applies, "applied change")} collecting post-change telemetry before verification.${nextDue}`;
   }
   if (status.status === "healthy") {
     return "Telemetry is fresh and all applied changes have completed safety checks.";
@@ -103,14 +110,20 @@ function safetyMessage(status: SystemStatusResponse, latest: string): string {
 
 function safetyMetric(status: SystemStatusResponse): string {
   if (status.verification_due > 0) return `Safety checks: ${status.verification_due} due`;
-  if (status.in_flight_applies > 0) return `Safety checks: ${status.in_flight_applies} queued`;
+  if (status.in_flight_applies > 0) return `Safety checks: ${status.in_flight_applies} scheduled`;
   return "Safety checks: clear";
+}
+
+function nextVerificationMetric(status: SystemStatusResponse): string | null {
+  if (!status.next_verification_due_at || status.verification_due > 0) return null;
+  return `Next check: ${fmtTime(status.next_verification_due_at)}`;
 }
 
 function SystemStatusCard({ status }: { status: SystemStatusResponse }) {
   const tone = status.status === "healthy" ? "healthy" : status.status === "empty" ? "empty" : "degraded";
   const latest = status.latest_usage_bucket ? fmtTime(status.latest_usage_bucket) : "no telemetry yet";
   const message = safetyMessage(status, latest);
+  const nextCheck = nextVerificationMetric(status);
 
   return (
     <div className={`system-status ${tone}`}>
@@ -124,6 +137,7 @@ function SystemStatusCard({ status }: { status: SystemStatusResponse }) {
       <div className="system-status-metrics">
         <span>Latest telemetry: {latest}</span>
         <span>Age: {durationLabel(status.telemetry_age_seconds)}</span>
+        {nextCheck && <span>{nextCheck}</span>}
         <span>{safetyMetric(status)}</span>
       </div>
     </div>
@@ -132,10 +146,18 @@ function SystemStatusCard({ status }: { status: SystemStatusResponse }) {
 
 function RecentApplyCard({
   applies,
+  runsByEvent,
+  pendingRecommendations,
+  canApply,
   nameOf,
+  onContinue,
 }: {
   applies: ApplyEvent[];
+  runsByEvent: Map<number, VerificationRun>;
+  pendingRecommendations: Recommendation[];
+  canApply: boolean;
   nameOf: (id: number) => string;
+  onContinue: (rec: Recommendation) => void;
 }) {
   return (
     <section className="card activity-card">
@@ -151,27 +173,46 @@ function RecentApplyCard({
         <EmptyState msg="No apply events yet." />
       ) : (
         <div className="activity-list">
-          {applies.slice(0, 6).map((event) => (
-            <article className="activity-row" key={event.ID}>
-              <div className={`activity-icon ${event.Result}`}>
-                <Activity size={16} />
-              </div>
-              <div className="activity-main">
-                <div className="activity-title">
-                  <span>{nameOf(event.WorkloadID)}</span>
-                  {resultPill(event.Result)}
+          {applies.slice(0, 6).map((event) => {
+            const run = runsByEvent.get(event.ID);
+            const hasMoreSteps = event.Result === "applied" && event.StepNumber > 0 && event.TotalSteps > event.StepNumber;
+            const continuation =
+              run?.Verdict === "passed" && hasMoreSteps
+                ? continuationFor(event, pendingRecommendations)
+                : null;
+            return (
+              <article className="activity-row" key={event.ID}>
+                <div className={`activity-icon ${event.Result}`}>
+                  <Activity size={16} />
                 </div>
-                <div className="activity-meta">
-                  <span>#{event.ID}</span>
-                  <span>{event.Actor}</span>
-                  <span>{fmtTime(event.CreatedAt)}</span>
+                <div className="activity-main">
+                  <div className="activity-title">
+                    <span>{nameOf(event.WorkloadID)}</span>
+                    {resultPill(event.Result)}
+                  </div>
+                  <div className="activity-meta">
+                    <span>Step {event.StepNumber}/{event.TotalSteps}</span>
+                    <span>{event.Actor}</span>
+                    <span>{fmtTime(event.CreatedAt)}</span>
+                  </div>
                 </div>
-              </div>
-              <div className="activity-step">
-                {event.StepNumber}/{event.TotalSteps}
-              </div>
-            </article>
-          ))}
+                <div className="activity-step">
+                  {continuation ? (
+                    <button
+                      className="btn small continue-step"
+                      type="button"
+                      onClick={() => onContinue(continuation)}
+                      disabled={!canApply}
+                    >
+                      Continue step {event.StepNumber + 1}/{event.TotalSteps}
+                    </button>
+                  ) : (
+                    <span>{event.StepNumber}/{event.TotalSteps}</span>
+                  )}
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
     </section>
@@ -279,10 +320,11 @@ async function fallbackSystemStatus({
   const inFlightApplies = applies.filter(
     (event) => event.Result === "applied" && !verifiedApplyIDs.has(event.ID),
   );
-  const verifyWindowSeconds = 24 * 60 * 60;
+  const verifyWindowSeconds = 60 * 60;
   const verificationDue = inFlightApplies.filter((event) => {
     const created = Date.parse(event.CreatedAt);
-    return !Number.isNaN(created) && generatedAt.getTime() - created >= verifyWindowSeconds * 1000;
+    const step = Math.max(1, event.StepNumber || 1);
+    return !Number.isNaN(created) && generatedAt.getTime() - created >= verifyWindowSeconds * step * 1000;
   }).length;
 
   const sampled = workloads.slice(0, 6);
@@ -339,19 +381,23 @@ async function fallbackSystemStatus({
 }
 
 export default function DashboardView() {
+  const { authEnabled, user } = useAuth();
+  const canApply = !authEnabled || user?.role === "operator" || user?.role === "admin";
   const [state, setState] = React.useState<
     | { phase: "loading" }
     | { phase: "refreshing"; previous: DashboardReadyState }
     | { phase: "error"; msg: string }
     | DashboardReadyState
   >({ phase: "loading" });
+  const [applyRec, setApplyRec] = React.useState<Recommendation | null>(null);
 
   const fetchDashboard = React.useCallback(async (): Promise<DashboardReadyState> => {
-    const [savings, workloads, applies, runs] = await Promise.all([
+    const [savings, workloads, applies, runs, recBody] = await Promise.all([
       api.savings(),
       api.workloads(),
       api.applies(),
       api.verificationRuns(),
+      api.recommendations({ status: "pending", limit: 100 }),
     ]);
     const system =
       (await api.systemStatus().catch(() =>
@@ -361,6 +407,7 @@ export default function DashboardView() {
     return {
       phase: "ready",
       workloads,
+      pendingRecommendations: recBody.recommendations || [],
       applies,
       runs,
       savings: savings || {},
@@ -409,7 +456,8 @@ export default function DashboardView() {
 
   const view = state.phase === "refreshing" ? state.previous : state;
   const refreshing = state.phase === "refreshing";
-  const { workloads, applies, runs, savings, system, updatedAt } = view;
+  const { workloads, pendingRecommendations, applies, runs, savings, system, updatedAt } = view;
+  const runsByEvent = new Map(runs.map((run) => [run.ApplyEventID, run]));
 
   const projected = pick<number>(savings, [
     "projected_monthly_savings",
@@ -481,9 +529,27 @@ export default function DashboardView() {
       </div>
 
       <div className="dashboard-grid two">
-        <RecentApplyCard applies={applies} nameOf={nameOf} />
+        <RecentApplyCard
+          applies={applies}
+          runsByEvent={runsByEvent}
+          pendingRecommendations={pendingRecommendations}
+          canApply={canApply}
+          nameOf={nameOf}
+          onContinue={setApplyRec}
+        />
         <VerificationCard runs={runs} />
       </div>
+
+      {applyRec && (
+        <ApplyModal
+          rec={applyRec}
+          onClose={() => setApplyRec(null)}
+          onApplied={() => {
+            setApplyRec(null);
+            refresh();
+          }}
+        />
+      )}
     </div>
   );
 }

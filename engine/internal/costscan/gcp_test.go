@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"consize/internal/store"
 )
 
 func TestGCPSourceScansDetachedDisksAndStoppedInstances(t *testing.T) {
@@ -99,5 +101,63 @@ func TestGCPSourceScansDetachedDisksAndStoppedInstances(t *testing.T) {
 	if !strings.HasPrefix(opps[0].TerraformAddr, "google_compute_disk.") ||
 		!strings.HasPrefix(opps[1].TerraformAddr, "google_compute_instance.") {
 		t.Fatalf("bad terraform addrs: %q %q", opps[0].TerraformAddr, opps[1].TerraformAddr)
+	}
+}
+
+func TestGCPSourceDirectApplyDeletesOnlyDetachedDisk(t *testing.T) {
+	var sawDelete bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/compute/v1/projects/acme/zones/us-central1-a/disks/old-cache", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("auth header = %q", got)
+		}
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{
+				"name": "old-cache",
+				"selfLink": "https://compute.googleapis.com/compute/v1/projects/acme/zones/us-central1-a/disks/old-cache",
+				"zone": "https://compute.googleapis.com/compute/v1/projects/acme/zones/us-central1-a",
+				"status": "READY",
+				"users": []
+			}`))
+		case http.MethodDelete:
+			sawDelete = true
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"PENDING"}`))
+		default:
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	src := &GCPSource{
+		project:   "acme",
+		base:      srv.URL,
+		client:    srv.Client(),
+		tokenFunc: func(context.Context) (string, error) { return "test-token", nil },
+	}
+	opp := store.CostOpportunity{
+		ID:           7,
+		Provider:     "gcp",
+		ResourceType: TypeUnattachedVolume,
+		ResourceID:   "https://compute.googleapis.com/compute/v1/projects/acme/zones/us-central1-a/disks/old-cache",
+		Name:         "old-cache",
+		Action:       "delete_disk",
+	}
+	plan, err := src.ApplyDirect(context.Background(), opp, "dry_run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Applied || sawDelete {
+		t.Fatalf("dry run must not delete: %+v sawDelete=%v", plan, sawDelete)
+	}
+	res, err := src.ApplyDirect(context.Background(), opp, "approved")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Applied || !sawDelete {
+		t.Fatalf("approved cleanup did not delete: %+v sawDelete=%v", res, sawDelete)
 	}
 }

@@ -120,6 +120,7 @@ func New(st store.Store, pr pricing.Service, applier *apply.Service, dbApplier *
 			r.Post("/recommendations/{id}/apply", s.applyRecommendation)
 			r.Post("/recommendations/{id}/iac-pr", s.prepareRecommendationIaCPullRequest)
 			r.Post("/cost-opportunities/scan", s.scanCostOpportunities)
+			r.Post("/cost-opportunities/{id}/apply", s.applyCostOpportunity)
 			r.Post("/cost-opportunities/{id}/iac-pr", s.prepareIaCPullRequest)
 		})
 

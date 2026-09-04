@@ -3,11 +3,9 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"consize/internal/config"
@@ -24,7 +22,7 @@ func main() {
 		log.Fatalf("store: %v", err)
 	}
 
-	src, via, err := sourceFor(config.Str("CONSIZE_COSTSCAN", "fixture"))
+	src, via, err := costscan.SourceFor(config.Str("CONSIZE_COSTSCAN", "none"))
 	if err != nil {
 		log.Fatalf("CONSIZE_COSTSCAN: %v", err)
 	}
@@ -43,14 +41,4 @@ func main() {
 			o.ResourceType, o.Region, o.Name, o.Action, o.MonthlyCost)
 	}
 	log.Printf("costscan: %d open opportunities, $%.2f/mo", len(opps), total)
-}
-
-func sourceFor(kind string) (costscan.Source, string, error) {
-	switch strings.TrimSpace(strings.ToLower(kind)) {
-	case "", "fixture":
-		return costscan.FixtureSource{}, "fixture", nil
-	case "gcp":
-		return costscan.NewGCPSource(), "Google Compute Engine (CONSIZE_COSTSCAN=gcp)", nil
-	}
-	return nil, "", fmt.Errorf("unknown source %q (shipped: fixture, gcp)", kind)
 }

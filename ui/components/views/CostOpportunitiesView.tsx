@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { CloudOff, ExternalLink, GitPullRequest, RefreshCw } from "lucide-react";
+import { CloudOff, ExternalLink, GitPullRequest, RefreshCw, Trash2, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { CostOpportunity, IaCPullRequest } from "@/lib/types";
 import { fmtTime, money } from "@/lib/format";
@@ -47,6 +47,7 @@ export default function CostOpportunitiesView() {
   const [busy, setBusy] = React.useState<"scan" | number | null>(null);
   const [message, setMessage] = React.useState("");
   const [selectedPR, setSelectedPR] = React.useState<IaCPullRequest | null>(null);
+  const [history, setHistory] = React.useState<any[]>([]);
 
   const load = React.useCallback(() => {
     api
@@ -76,6 +77,30 @@ export default function CostOpportunitiesView() {
       setBusy(null);
     }
   };
+
+  const directCleanup = async (opp: CostOpportunity) => {
+    setBusy(opp.ID);
+    setMessage("");
+    try {
+      await api.applyCostOpportunity(opp.ID, "approved");
+      setMessage(`Requested cleanup for ${opp.Name || opp.ResourceID}.`);
+      setOpportunities((current) => current.filter((item) => item.ID !== opp.ID));
+    } catch (err) {
+      setMessage(errMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const clearSelectedPR = () => {
+    setSelectedPR(null);
+  };
+
+  const byID = React.useMemo(() => {
+    const map = new Map<number, CostOpportunity>();
+    opportunities.forEach((o) => map.set(o.ID, o));
+    return map;
+  }, [opportunities]);
 
   const openPR = async (opp: CostOpportunity) => {
     setBusy(opp.ID);
@@ -152,10 +177,11 @@ export default function CostOpportunitiesView() {
               <span className="card-count">{open.length} open</span>
             </div>
             <div className="cost-list">
-              {opportunities.map((opp) => {
+              {open.map((opp) => {
                 const pr = prs[String(opp.ID)];
+                const directSupported = opp.Provider === "gcp" || opp.Provider === "aws";
                 return (
-                  <article className="cost-row" key={opp.ID}>
+                  <article key={opp.ID} className={`cost-row ${busy === opp.ID ? "busy" : ""}`}>
                     <div className="cost-row-main">
                       <div className="cost-row-title">
                         <span>{opp.Name || opp.ResourceID}</span>
@@ -182,10 +208,18 @@ export default function CostOpportunitiesView() {
                           View PR
                         </button>
                       ) : (
-                        <button className="btn small" type="button" onClick={() => openPR(opp)} disabled={!canWrite || busy === opp.ID}>
-                          <GitPullRequest size={13} />
-                          {busy === opp.ID ? "Opening…" : "Open PR"}
-                        </button>
+                        <div className="cost-row-actions">
+                          {directSupported && (
+                            <button className="btn small ghost" type="button" onClick={() => directCleanup(opp)} disabled={!canWrite || busy === opp.ID}>
+                              <Trash2 size={13} />
+                              {busy === opp.ID ? "Cleaning…" : "Direct cleanup"}
+                            </button>
+                          )}
+                          <button className="btn small" type="button" onClick={() => openPR(opp)} disabled={!canWrite || busy === opp.ID}>
+                            <GitPullRequest size={13} />
+                            {busy === opp.ID ? "Opening…" : "Open PR"}
+                          </button>
+                        </div>
                       )}
                     </div>
                   </article>
@@ -196,11 +230,21 @@ export default function CostOpportunitiesView() {
 
           <aside className="card cost-pr-card">
             <div className="card-head">
-              <h2 className="card-title">Terraform workflow</h2>
+              <h2 className="card-title">IaC workflow</h2>
             </div>
             {selectedPR ? (
               <div className="cost-pr-preview">
-                <Pill color="gray">{selectedPR.Status}</Pill>
+                <div className="cost-pr-preview-top">
+                  <Pill color={selectedPR.Status === "failed" ? "red" : selectedPR.Status === "opened" ? "green" : "gray"}>
+                    {selectedPR.Status}
+                  </Pill>
+                  {(selectedPR.Status === "failed" || selectedPR.Error) && (
+                    <button className="btn small ghost" type="button" onClick={clearSelectedPR}>
+                      <X size={13} />
+                      Clear
+                    </button>
+                  )}
+                </div>
                 <h3>{selectedPR.Title}</h3>
                 <dl className="kv">
                   <div className="row"><dt className="k">Repo</dt><dd className="v">{selectedPR.Repo || "Not configured"}</dd></div>
@@ -222,13 +266,45 @@ export default function CostOpportunitiesView() {
             ) : (
               <div className="cost-pr-empty">
                 <GitPullRequest size={18} />
-                <p>Select an opportunity to open a Terraform PR.</p>
+                <p>Select an opportunity to open a reviewable cleanup PR.</p>
                 {top && <span>Highest impact: {top.Name || top.ResourceID} · {money(top.MonthlyCost)}/mo</span>}
               </div>
             )}
           </aside>
         </div>
       )}
+
+      <section className="card mt-4">
+        <div className="card-head">
+          <h2 className="card-title">Cleanup history</h2>
+          <span className="card-count">{history.length} {history.length === 1 ? "event" : "events"}</span>
+        </div>
+        {history.length === 0 ? (
+          <EmptyState msg="No cleanup actions yet." />
+        ) : (
+          <div className="cost-history-list">
+            {history.slice(0, 8).map((action) => {
+              const opp = byID.get(action.OpportunityID);
+              const resultColor = action.Result === "failed" ? "red" : action.Result === "applied" || action.Result === "resolved" ? "green" : "gray";
+              return (
+                <article className="cost-history-row" key={`${action.ID}-${action.CreatedAt}`}>
+                  <div>
+                    <div className="cost-history-title">
+                      <span>{opp?.Name || String(action.Evidence?.name || action.Evidence?.resource_id || `opportunity #${action.OpportunityID}`)}</span>
+                      <Pill color={resultColor}>{action.Result}</Pill>
+                    </div>
+                    <p className="cost-history-message">{action.Message}</p>
+                  </div>
+                  <div className="cost-history-meta">
+                    <span>{action.Actor}</span>
+                    <span>{fmtTime(action.CreatedAt)}</span>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
