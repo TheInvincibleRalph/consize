@@ -28,6 +28,8 @@ docker run -p 3000:3000 -p 8080:8080 -it ghcr.io/theinvincibleralph/consize-sand
 
 Open `http://localhost:3000` in your browser. You can watch the Verifier catch an intentional regression on the `checkout-api` workload and instantly trigger an automatic rollback to restore safety.
 
+<img src="img/demo-dashboard.png" alt="Consize Demo Dashboard" />
+
 ---
 
 ## Production Installation
@@ -71,6 +73,18 @@ For a deeper dive into how Consize works under the hood, explore our documentati
 - **[Architecture & Data Flow](docs/architecture.md)**
 - **[Security & Least Privilege](SECURITY.md)**
 - **[Decisions & ADR Log](docs/decisions.md)**
+
+---
+
+## Contributing
+
+Consize is completely open for contribution! We build with the community, not just for the community. 
+
+Whether it's adding support for new cloud providers, fixing bugs, or improving documentation, we welcome all contributions. 
+
+- **Good first issues:** Look for the `good first issue` label on our issue tracker to get started.
+- **Design proposals:** For larger architectural changes, please open a GitHub Discussion first. We use Architecture Decision Records (ADRs) to document significant decisions.
+- **Local Development:** Check out the [Architecture & Data Flow](docs/architecture.md) documentation to understand how the components fit together before spinning up your local environment.
 
 ---
 
