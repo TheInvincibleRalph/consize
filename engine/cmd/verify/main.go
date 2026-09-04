@@ -28,9 +28,16 @@ func main() {
 		defer pg.Close()
 	}
 
-	patcher, err := apply.NewK8sPatcher(config.Str("KUBECONFIG", ""))
-	if err != nil {
-		log.Fatalf("kube config: %v (the verifier needs a write identity to roll back)", err)
+	var patcher apply.Patcher
+	if config.Bool("CONSIZE_DEMO_PATCHER", false) {
+		log.Printf("CONSIZE_DEMO_PATCHER=true — using in-memory demo patcher for rollback")
+		patcher = apply.NewDemoPatcher()
+	} else {
+		kp, err := apply.NewK8sPatcher(config.Str("KUBECONFIG", ""))
+		if err != nil {
+			log.Fatalf("kube config: %v (the verifier needs a write identity to roll back)", err)
+		}
+		patcher = kp
 	}
 	applier := apply.NewService(st, patcher, apply.DefaultConfig())
 	// Database class events roll back through the DB apply engine. The
@@ -71,9 +78,11 @@ func main() {
 	now := time.Now().UTC()
 	due, errorsSeen := 0, 0
 	for _, e := range events {
-		readyAt := e.CreatedAt.UTC().Add(cfg.Window)
+		window := config.StepScaledDuration(cfg.Window, e.StepNumber)
+		readyAt := e.CreatedAt.UTC().Add(window)
 		if !readyAt.Before(now) {
-			log.Printf("apply %d: verification window not due (ready at %s)", e.ID, readyAt.Format(time.RFC3339))
+			log.Printf("apply %d: verification window not due (step %d, window %s, ready at %s)",
+				e.ID, e.StepNumber, window, readyAt.Format(time.RFC3339))
 			continue
 		}
 		due++

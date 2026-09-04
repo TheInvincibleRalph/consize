@@ -6,11 +6,8 @@
 # KUBECONFIG is deliberately not set: the client library falls back to
 # the in-cluster config, so the ServiceAccount IS the write identity.
 #
-# Auth (ADR-037): the image ships the login/session routes, but this
-# cluster build runs CONSIZE_AUTH_REQUIRED=false for now — the embedded
-# SPA fallback and the curl actor flows stay functional until onboarding
-# lands (E1.5). Flipping it to true and adding CONSIZE_BOOTSTRAP_ADMIN
-# (Secret key bootstrap-admin, "email:password") turns enforcement on;
+# Auth (ADR-037): production requires server-verified users and roles. Add
+# CONSIZE_BOOTSTRAP_ADMIN through the consize-auth Secret for first install;
 # the bootstrap admin is created only while the users table is empty.
 ---
 apiVersion: apps/v1
@@ -43,12 +40,12 @@ spec:
                   name: consize-store
                   key: database-url
             - name: CONSIZE_AUTH_REQUIRED
-              value: "false"
-            # Live-E2E window; keep aligned with verify-cronjob.yaml so
-            # /api/v1/system/status reports the verifier's actual cadence.
-            # Production deploys can omit this and use the 24h default.
+              value: "true"
+            # Keep aligned with verify-cronjob.yaml so /api/v1/system/status
+            # reports the verifier's actual base production window. The
+            # effective window scales by apply step number.
             - name: CONSIZE_VERIFY_WINDOW
-              value: "15m"
+              value: "1h"
             # Optional Slack secret used by the Alerting UI's "Send test" and
             # by stored contact-point configs that reference this env var.
             # The webhook value itself is never stored in Postgres.
@@ -58,6 +55,23 @@ spec:
                   name: consize-alerts
                   key: slack-webhook
                   optional: true
+            # Optional GitHub token used by the IaC PR workflow. Store only
+            # the env var name in Consize settings; the token value stays here.
+            - name: CONSIZE_GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: consize-github
+                  key: token
+                  optional: true
+            # Manual cloud-waste scans from the UI use the same live provider
+            # source as the costscan CronJob. Never point production at the
+            # fixture source.
+            - name: CONSIZE_COSTSCAN
+              value: "gcp"
+            - name: CONSIZE_GCP_PROJECT
+              value: "devops-portfolio-prod"
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /etc/consize-gcp/key.json
             - name: CONSIZE_BOOTSTRAP_ADMIN
               valueFrom:
                 secretKeyRef:
@@ -92,6 +106,13 @@ spec:
             limits:
               cpu: 250m
               memory: 256Mi
+          volumeMounts:
+            - mountPath: /etc/consize-gcp
+              name: consize-gcp
+      volumes:
+        - name: consize-gcp
+          secret:
+            secretName: consize-gcp
 ---
 apiVersion: v1
 kind: Service

@@ -85,6 +85,14 @@ func analyzeAll(ctx context.Context, st store.Store, prices analysis.Prices, cfg
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("list workloads: %w", err)
 	}
+	inFlight, err := inFlightRecommendationKeys(ctx, st)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("list in-flight applies: %w", err)
+	}
+	continuations, err := pendingContinuationKeys(ctx, st)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("list pending continuations: %w", err)
+	}
 
 	type engineWorkload struct {
 		analysis.Workload
@@ -132,8 +140,12 @@ func analyzeAll(ctx context.Context, st store.Store, prices analysis.Prices, cfg
 	res := analysis.AnalyzeCfg(ws, prices, cfg)
 	dbRes := analysis.DBAnalyzeCfg(dbInstances, cfg)
 
-	// Persist k8s recommendations (supersede prior pending).
+	// Persist k8s recommendations (supersede prior pending). If an apply is
+	// still waiting for verification, leave that workload/resource alone:
+	// the apply engine may already have queued a follow-up step, and fresh
+	// analysis must not supersede it before the safety check unlocks it.
 	recs := make([]store.Recommendation, 0, len(res.Recommendations))
+	k8sOut := make([]analysis.Recommendation, 0, len(res.Recommendations))
 	for _, r := range res.Recommendations {
 		var wid int64
 		for i := range engine {
@@ -142,6 +154,17 @@ func analyzeAll(ctx context.Context, st store.Store, prices analysis.Prices, cfg
 				break
 			}
 		}
+		if inFlight[recommendationKey(wid, r.Resource)] {
+			slog.Debug("skipping recommendation while apply awaits verification",
+				"workload", r.Namespace+"/"+r.Workload, "resource", r.Resource)
+			continue
+		}
+		if continuations[recommendationKey(wid, r.Resource)] {
+			slog.Debug("skipping recommendation while stepped continuation is pending",
+				"workload", r.Namespace+"/"+r.Workload, "resource", r.Resource)
+			continue
+		}
+		k8sOut = append(k8sOut, r)
 		recs = append(recs, store.Recommendation{
 			WorkloadID:     wid,
 			Resource:       r.Resource,
@@ -167,11 +190,23 @@ func analyzeAll(ctx context.Context, st store.Store, prices analysis.Prices, cfg
 		widByName[w.Namespace+"/"+w.Name] = w.ID
 	}
 	dbRecs := make([]store.Recommendation, 0, len(dbRes.Recommendations))
+	dbOut := make([]analysis.DBRecommendation, 0, len(dbRes.Recommendations))
 	for _, r := range dbRes.Recommendations {
 		wid, ok := widByName[r.Namespace+"/"+r.Workload]
 		if !ok {
 			return nil, nil, nil, nil, fmt.Errorf("db recommendation for unknown workload %s/%s", r.Namespace, r.Workload)
 		}
+		if inFlight[recommendationKey(wid, store.ResourceClass)] {
+			slog.Debug("skipping db recommendation while apply awaits verification",
+				"workload", r.Namespace+"/"+r.Workload, "resource", store.ResourceClass)
+			continue
+		}
+		if continuations[recommendationKey(wid, store.ResourceClass)] {
+			slog.Debug("skipping db recommendation while stepped continuation is pending",
+				"workload", r.Namespace+"/"+r.Workload, "resource", store.ResourceClass)
+			continue
+		}
+		dbOut = append(dbOut, r)
 		dbRecs = append(dbRecs, store.Recommendation{
 			WorkloadID:     wid,
 			Resource:       store.ResourceClass,
@@ -201,12 +236,45 @@ func analyzeAll(ctx context.Context, st store.Store, prices analysis.Prices, cfg
 		slog.Info("pruned superseded recommendations", "count", pruned)
 	}
 
-	sort.Slice(res.Recommendations, func(i, j int) bool {
-		return res.Recommendations[i].SavingsMonth > res.Recommendations[j].SavingsMonth
+	sort.Slice(k8sOut, func(i, j int) bool {
+		return k8sOut[i].SavingsMonth > k8sOut[j].SavingsMonth
 	})
 	skipped := append([]analysis.Skipped{}, res.Skipped...)
 	skipped = append(skipped, dbRes.Skipped...)
-	return res.Recommendations, dbRes.Recommendations, dbRes.Kept, skipped, nil
+	return k8sOut, dbOut, dbRes.Kept, skipped, nil
+}
+
+func inFlightRecommendationKeys(ctx context.Context, st store.Store) (map[string]bool, error) {
+	events, err := st.AppliedEventsUnverified(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(events))
+	for _, e := range events {
+		if e.Diff.Resource == "" {
+			continue
+		}
+		out[recommendationKey(e.WorkloadID, e.Diff.Resource)] = true
+	}
+	return out, nil
+}
+
+func pendingContinuationKeys(ctx context.Context, st store.Store) (map[string]bool, error) {
+	recs, _, err := st.ListRecommendations(ctx, nil, store.StatusPending, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool)
+	for _, r := range recs {
+		if r.StepNumber > 1 && r.TotalSteps >= r.StepNumber {
+			out[recommendationKey(r.WorkloadID, r.Resource)] = true
+		}
+	}
+	return out, nil
+}
+
+func recommendationKey(workloadID int64, resource string) string {
+	return fmt.Sprintf("%d/%s", workloadID, resource)
 }
 
 // dbInstanceFromStore loads one database's usage buckets and maps them

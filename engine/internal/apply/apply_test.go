@@ -323,6 +323,9 @@ func TestApplyStepSplittingQueuesFollowUp(t *testing.T) {
 	if followUp.CurrentValue != 2800 || followUp.ProposedValue != 2000 {
 		t.Fatalf("follow-up state: %+v", followUp)
 	}
+	if followUp.StepNumber != 2 || followUp.TotalSteps != 2 {
+		t.Fatalf("follow-up must continue the original chain as step 2/2, got %d/%d", followUp.StepNumber, followUp.TotalSteps)
+	}
 	// Savings scale with the request share of the remaining reduction:
 	// 2800 → 2000 is 800 of the 2000 total reduction = 40%.
 	want := 50 * 800 / 2000.0
@@ -353,6 +356,9 @@ func TestApplyStepSplittingQueuesFollowUp(t *testing.T) {
 	}
 	if res2.Diff.ProposedReq != 2000 || res2.FollowUpID != 0 {
 		t.Fatalf("second step must reach the target with no new follow-up: %+v", res2)
+	}
+	if res2.StepNumber != 2 || res2.TotalSteps != 2 {
+		t.Fatalf("second apply must record step 2/2, got %d/%d", res2.StepNumber, res2.TotalSteps)
 	}
 }
 

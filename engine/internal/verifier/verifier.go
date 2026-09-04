@@ -10,17 +10,20 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
 	"consize/internal/alert"
 	"consize/internal/collector"
+	"consize/internal/config"
 	"consize/internal/store"
 )
 
 // Config tunes verification.
 type Config struct {
-	// Window is the baseline and post-apply comparison window (24h).
+	// Window is the base baseline/post comparison window. The effective
+	// window scales by apply step: step 1 = 1x, step 2 = 2x, etc.
 	Window time.Duration
 	// SustainedMinutes is how long a rate must stay above its
 	// threshold before it counts as a breach (5).
@@ -37,7 +40,7 @@ type Config struct {
 
 // DefaultConfig returns the shipped settings.
 func DefaultConfig() Config {
-	return Config{Window: 24 * time.Hour, SustainedMinutes: 5}
+	return Config{Window: time.Hour, SustainedMinutes: 5}
 }
 
 // signalSpec is one SLI: how to query it and how to judge it.
@@ -45,7 +48,12 @@ type signalSpec struct {
 	name  string
 	kind  string // "rate" | "counter"
 	mult  float64
-	query func(namespace string) string
+	query func(scope queryScope) string
+}
+
+type queryScope struct {
+	namespace string
+	workload  string
 }
 
 // Service verifies applied events against Prometheus.
@@ -91,30 +99,47 @@ func (v Verdict) String() string {
 // signals builds the active SLI set from config.
 func (s *Service) signals() []signalSpec {
 	out := []signalSpec{
-		{name: "throttling", kind: "rate", mult: 1.0, query: func(ns string) string {
-			return fmt.Sprintf(`sum by (namespace) (rate(container_cpu_cfs_throttled_seconds_total{namespace=%q}[5m]))`, ns)
+		{name: "throttling", kind: "rate", mult: 1.0, query: func(scope queryScope) string {
+			return fmt.Sprintf(`sum by (namespace) (rate(container_cpu_cfs_throttled_seconds_total{%s}[5m]))`, scope.containerMatcher())
 		}},
-		{name: "oom_killed", kind: "counter", mult: 0, query: func(ns string) string {
-			return fmt.Sprintf(`sum by (namespace) (increase(container_oom_events_total{namespace=%q}[5m]))`, ns)
+		{name: "oom_killed", kind: "counter", mult: 0, query: func(scope queryScope) string {
+			return fmt.Sprintf(`sum by (namespace) (increase(container_oom_events_total{%s}[5m]))`, scope.containerMatcher())
 		}},
-		{name: "restarts", kind: "counter", mult: 0, query: func(ns string) string {
-			return fmt.Sprintf(`sum by (namespace) (increase(kube_pod_container_status_restarts_total{namespace=%q}[5m]))`, ns)
+		{name: "restarts", kind: "counter", mult: 0, query: func(scope queryScope) string {
+			return fmt.Sprintf(`sum by (namespace) (increase(kube_pod_container_status_restarts_total{%s}[5m]))`, scope.containerMatcher())
 		}},
-		{name: "evictions", kind: "counter", mult: 0, query: func(ns string) string {
-			return fmt.Sprintf(`sum by (namespace) (increase(kube_pod_status_reason{namespace=%q,reason="Evicted"}[5m]))`, ns)
+		{name: "evictions", kind: "counter", mult: 0, query: func(scope queryScope) string {
+			return fmt.Sprintf(`sum by (namespace) (increase(kube_pod_status_reason{%s,reason="Evicted"}[5m]))`, scope.podMatcher())
 		}},
 	}
 	if s.cfg.ErrorExpr != "" {
-		out = append(out, signalSpec{name: "error_rate", kind: "rate", mult: 1.5, query: func(ns string) string {
+		out = append(out, signalSpec{name: "error_rate", kind: "rate", mult: 1.5, query: func(_ queryScope) string {
 			return fmt.Sprintf(`sum by (namespace) (rate(%s[5m]))`, s.cfg.ErrorExpr)
 		}})
 	}
 	if s.cfg.P99Expr != "" {
-		out = append(out, signalSpec{name: "p99_latency", kind: "rate", mult: 1.3, query: func(ns string) string {
+		out = append(out, signalSpec{name: "p99_latency", kind: "rate", mult: 1.3, query: func(_ queryScope) string {
 			return fmt.Sprintf(`sum by (namespace) (rate(%s[5m]))`, s.cfg.P99Expr)
 		}})
 	}
 	return out
+}
+
+// podMatcher scopes built-in Kubernetes SLIs to the Deployment that was
+// changed. Consize currently manages Deployment workloads; their pods are
+// named <deployment>-<pod-template-hash>-<pod-id>. This keeps an unrelated
+// CrashLoopBackOff in the same namespace from rolling back a healthy apply.
+func (q queryScope) podMatcher() string {
+	ns := fmt.Sprintf(`namespace=%q`, q.namespace)
+	if q.workload == "" {
+		return ns
+	}
+	podRegex := "^" + regexp.QuoteMeta(q.workload) + `-[^-]+-[^-]+$`
+	return fmt.Sprintf(`%s,pod=~%q`, ns, podRegex)
+}
+
+func (q queryScope) containerMatcher() string {
+	return q.podMatcher() + `,container!="POD",container!=""`
 }
 
 // Verify compares SLIs across the baseline and post windows for one
@@ -136,13 +161,15 @@ func (s *Service) verifyK8s(ctx context.Context, event store.ApplyEvent) (Verdic
 		return Verdict{}, fmt.Errorf("load workload %d: %w", event.WorkloadID, err)
 	}
 	applyTime := event.CreatedAt.UTC()
-	baseStart, baseEnd := applyTime.Add(-s.cfg.Window), applyTime
+	window := config.StepScaledDuration(s.cfg.Window, event.StepNumber)
+	baseStart, baseEnd := applyTime.Add(-window), applyTime
 	postStart, postEnd := applyTime, time.Now().UTC()
 
 	v := Verdict{SLIs: map[string]any{}, Thresholds: map[string]any{}}
 	var judged, unavailable, inconclusive int
+	scope := queryScope{namespace: wl.Namespace, workload: wl.Name}
 	for _, sig := range s.signals() {
-		ev, _, err := s.evaluate(ctx, sig, wl.Namespace, baseStart, baseEnd, postStart, postEnd)
+		ev, _, err := s.evaluate(ctx, sig, scope, baseStart, baseEnd, postStart, postEnd)
 		if err != nil {
 			return v, err
 		}
@@ -166,7 +193,9 @@ func (s *Service) verifyK8s(ctx context.Context, event store.ApplyEvent) (Verdic
 		v.Inconclusive = true
 	}
 	v.Thresholds = map[string]any{
-		"window":            s.cfg.Window.String(),
+		"window":            window.String(),
+		"base_window":       s.cfg.Window.String(),
+		"step_number":       event.StepNumber,
 		"sustained_minutes": s.cfg.SustainedMinutes,
 		"error_mult":        1.5, "p99_mult": 1.3,
 	}
@@ -313,15 +342,15 @@ func escalationLabel(wl store.Workload) string {
 
 // evaluate judges one signal and returns its evidence map plus whether
 // the signal was available at all (ok=false = metric not emitted).
-func (s *Service) evaluate(ctx context.Context, sig signalSpec, ns string,
+func (s *Service) evaluate(ctx context.Context, sig signalSpec, scope queryScope,
 	baseStart, baseEnd, postStart, postEnd time.Time) (map[string]any, bool, error) {
 
 	ev := map[string]any{"signal": sig.name}
-	base, err := s.fetch(ctx, sig.query(ns), baseStart, baseEnd)
+	base, err := s.fetch(ctx, sig.query(scope), baseStart, baseEnd)
 	if err != nil {
 		return nil, false, err
 	}
-	post, err := s.fetch(ctx, sig.query(ns), postStart, postEnd)
+	post, err := s.fetch(ctx, sig.query(scope), postStart, postEnd)
 	if err != nil {
 		return nil, false, err
 	}

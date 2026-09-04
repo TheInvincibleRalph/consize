@@ -5,15 +5,16 @@
 #
 # Env wiring:
 #   DATABASE_URL / PROMETHEUS_URL from a Secret (example below)
-#   CONSIZE_VERIFY_WINDOW   default 24h — the live E2E shortens it to 15m
-#   CONSIZE_SUSTAINED_MINUTES default 5 — the live E2E uses 3
+#   CONSIZE_VERIFY_WINDOW   base window, default 1h
+#   CONSIZE_SUSTAINED_MINUTES default 5
 #   CONSIZE_SLI_ERROR_EXPR / CONSIZE_SLI_P99_EXPR  opt-in app-level SLIs
 #   CONSIZE_ALERT_ROUTING   Grafana-style contact points + notification policies
 #   CONSIZE_SLACK_WEBHOOK   legacy/default Slack contact point webhook
 #
-# NOTE: the two overrides below are the live E2E's session-length
-# windows; a production deployment would omit them and take the
-# 24h / 5m defaults.
+# Production verification starts with a 1-hour observation window and scales
+# by step number: step 1 waits 1h, step 2 waits 2h, and so on. The CronJob
+# runs every minute, so due applies are picked up automatically as soon as
+# their safety window opens.
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -21,7 +22,7 @@ metadata:
   name: consize-verify
   namespace: consize-system
 spec:
-  schedule: "*/15 * * * *" # live/demo cadence; production can run hourly with the 24h window
+  schedule: "* * * * *"
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
@@ -43,12 +44,10 @@ spec:
                     secretKeyRef:
                       name: consize-store
                       key: prometheus-url
-                # Live-E2E windows (see header comment); omit for the
-                # shipped 24h / 5m defaults.
                 - name: CONSIZE_VERIFY_WINDOW
-                  value: "15m"
+                  value: "1h"
                 - name: CONSIZE_SUSTAINED_MINUTES
-                  value: "3"
+                  value: "5"
                 # Grafana-style notification routing. Secrets stay in env vars
                 # (from Kubernetes Secrets); routing JSON references them by
                 # name. If this is omitted, CONSIZE_SLACK_WEBHOOK alone still

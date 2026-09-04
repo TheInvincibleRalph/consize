@@ -23,6 +23,7 @@ type Memory struct {
 	events   []ApplyEvent
 	verifs   []VerificationRun
 	opps     []CostOpportunity
+	costActs []CostAction
 	iacPRs   []IaCPullRequest
 	teams    map[int64]Team
 	bySlug   map[string]int64
@@ -225,6 +226,7 @@ func (m *Memory) CreateRecommendations(_ context.Context, recs []Recommendation)
 		}
 	}
 	for _, r := range recs {
+		r = normalizeRecommendationSteps(r)
 		m.next++
 		r.ID = m.next
 		r.CreatedAt = time.Now().UTC()
@@ -285,6 +287,7 @@ func (m *Memory) PruneRecommendations(_ context.Context, status string, cutoff t
 func (m *Memory) CreateFollowUpRecommendation(_ context.Context, r Recommendation) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	r = normalizeRecommendationSteps(r)
 	m.next++
 	r.ID = m.next
 	r.CreatedAt = time.Now().UTC()
@@ -613,6 +616,62 @@ func (m *Memory) GetCostOpportunity(_ context.Context, id int64) (CostOpportunit
 		}
 	}
 	return CostOpportunity{}, fmt.Errorf("cost opportunity %d: %w", id, ErrNotFound)
+}
+
+func (m *Memory) SetCostOpportunityStatus(_ context.Context, id int64, status string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.opps {
+		if m.opps[i].ID == id {
+			m.opps[i].Status = status
+			m.opps[i].UpdatedAt = time.Now().UTC()
+			return nil
+		}
+	}
+	return fmt.Errorf("cost opportunity %d: %w", id, ErrNotFound)
+}
+
+func (m *Memory) CreateCostAction(_ context.Context, action CostAction) (CostAction, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	found := false
+	for _, o := range m.opps {
+		if o.ID == action.OpportunityID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return CostAction{}, fmt.Errorf("cost opportunity %d: %w", action.OpportunityID, ErrNotFound)
+	}
+	m.next++
+	action.ID = m.next
+	if action.Mode == "" {
+		action.Mode = "dry_run"
+	}
+	if action.Result == "" {
+		action.Result = CostActionRequested
+	}
+	if action.Evidence == nil {
+		action.Evidence = map[string]any{}
+	}
+	action.CreatedAt = time.Now().UTC()
+	m.costActs = append(m.costActs, action)
+	return action, nil
+}
+
+func (m *Memory) ListCostActions(_ context.Context, opportunityID *int64) ([]CostAction, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []CostAction{}
+	for _, action := range m.costActs {
+		if opportunityID != nil && action.OpportunityID != *opportunityID {
+			continue
+		}
+		out = append(out, action)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
 }
 
 func (m *Memory) CreateIaCPullRequest(_ context.Context, pr IaCPullRequest) (IaCPullRequest, error) {

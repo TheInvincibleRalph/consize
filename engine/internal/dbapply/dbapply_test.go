@@ -160,6 +160,9 @@ func TestApplyOneClassStepQueuesFollowUp(t *testing.T) {
 	if fu.Status != store.StatusPending {
 		t.Fatalf("follow-up must be pending, got %s", fu.Status)
 	}
+	if fu.StepNumber != 2 || fu.TotalSteps != 4 {
+		t.Fatalf("follow-up must continue original chain as step 2/4, got %d/%d", fu.StepNumber, fu.TotalSteps)
+	}
 	if fu.SavingsMonthly != 85 { // price(large) − price(micro)
 		t.Fatalf("follow-up savings: want $85/mo, got %v", fu.SavingsMonthly)
 	}

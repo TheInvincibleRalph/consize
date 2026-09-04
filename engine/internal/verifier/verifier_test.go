@@ -194,6 +194,38 @@ func TestVerdictFailedNewOOMs(t *testing.T) {
 	}
 }
 
+func TestVerdictIgnoresOtherWorkloadRestartsInSameNamespace(t *testing.T) {
+	// Regression guard for the live redis-cart rollback: verification
+	// must scope kube-native SLIs to the workload that changed. A noisy
+	// sibling Deployment in the same namespace must not fail this apply.
+	st := store.NewMemory()
+	prom := &fakeProm{}
+	event, ns := seedAppliedEvent(t, st)
+
+	throttleQ := throttleQuery(ns)
+	prom.setBaseline(throttleQ, 0.1, 0.1, 0.1, 0.1, 0.1)
+	prom.setPost(throttleQ, 0.1, 0.1, 0.1, 0.1, 0.1)
+	for _, q := range []string{oomQuery(ns), restartQuery(ns), evictQuery(ns)} {
+		prom.setBaseline(q, 0, 0, 0, 0, 0)
+		prom.setPost(q, 0, 0, 0, 0, 0)
+	}
+
+	// This is the old namespace-wide restart query. It would have failed
+	// the apply before the workload-scoping fix; the verifier should no
+	// longer ask Prometheus this question.
+	prom.setBaseline(namespaceRestartQuery(ns), 0, 0, 0, 0, 0)
+	prom.setPost(namespaceRestartQuery(ns), 1, 1, 1, 1, 1)
+
+	var rollbacks []int64
+	v := verify(t, st, prom, &rollbacks, event)
+	if v.String() != store.VerdictPassed {
+		t.Fatalf("same-namespace noise must not fail verification: %s (slis %v)", v.String(), v.SLIs)
+	}
+	if len(rollbacks) != 0 {
+		t.Fatalf("no rollback for unrelated namespace noise: %v", rollbacks)
+	}
+}
+
 func TestVerdictPassedWhenThrottleIsBrief(t *testing.T) {
 	// A 4-minute spike (4 consecutive samples) is below the 5-minute
 	// sustained threshold — noisy bursts must not roll back.
@@ -295,16 +327,28 @@ func TestVerificationRunCarriesEvidence(t *testing.T) {
 // --- query helpers (must mirror verifier.go's PromQL construction) ---
 
 func throttleQuery(ns string) string {
-	return `sum by (namespace) (rate(container_cpu_cfs_throttled_seconds_total{namespace="` + ns + `"}[5m]))`
+	return `sum by (namespace) (rate(container_cpu_cfs_throttled_seconds_total{` + containerMatcher(ns, "api") + `}[5m]))`
 }
 func oomQuery(ns string) string {
-	return `sum by (namespace) (increase(container_oom_events_total{namespace="` + ns + `"}[5m]))`
+	return `sum by (namespace) (increase(container_oom_events_total{` + containerMatcher(ns, "api") + `}[5m]))`
 }
 func restartQuery(ns string) string {
-	return `sum by (namespace) (increase(kube_pod_container_status_restarts_total{namespace="` + ns + `"}[5m]))`
+	return `sum by (namespace) (increase(kube_pod_container_status_restarts_total{` + containerMatcher(ns, "api") + `}[5m]))`
 }
 func evictQuery(ns string) string {
-	return `sum by (namespace) (increase(kube_pod_status_reason{namespace="` + ns + `",reason="Evicted"}[5m]))`
+	return `sum by (namespace) (increase(kube_pod_status_reason{` + podMatcher(ns, "api") + `,reason="Evicted"}[5m]))`
+}
+
+func namespaceRestartQuery(ns string) string {
+	return `sum by (namespace) (increase(kube_pod_container_status_restarts_total{namespace="` + ns + `"}[5m]))`
+}
+
+func podMatcher(ns, workload string) string {
+	return `namespace="` + ns + `",pod=~"^` + workload + `-[^-]+-[^-]+$"`
+}
+
+func containerMatcher(ns, workload string) string {
+	return podMatcher(ns, workload) + `,container!="POD",container!=""`
 }
 
 // Note: baseline and post windows reuse the same PromQL string; the

@@ -116,6 +116,201 @@ func TestAnalyzeCommandPipeline(t *testing.T) {
 	}
 }
 
+func TestAnalyzePreservesFollowUpWhileApplyIsUnverified(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemory()
+
+	wid, err := st.UpsertWorkload(ctx, store.Workload{
+		Name: "redis-cart", Namespace: "boutique", Source: "k8s",
+		RequestCPUMilli: 240, LimitCPUMilli: 2000,
+		RequestMemBytes: 1 << 30, LimitMemBytes: 2 << 30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	for d := 0; d < 5; d++ {
+		for i := 0; i < 96; i++ {
+			ts := base.Add(time.Duration(d*96+i) * 15 * time.Minute)
+			if err := st.UpsertBucket(ctx, store.Bucket{
+				WorkloadID: wid, Metric: store.MetricCPUMilli, WindowStart: ts,
+				P95: 200, P99: 220, Max: 250, Samples: 2,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.UpsertBucket(ctx, store.Bucket{
+				WorkloadID: wid, Metric: store.MetricMemBytes, WindowStart: ts,
+				P95: 300 * 1 << 20, P99: 320 * 1 << 20, Max: 400 * 1 << 20, Samples: 2,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	eventID, err := st.CreateApplyEvent(ctx, store.ApplyEvent{
+		RecommendationID: 101,
+		WorkloadID:       wid,
+		Actor:            "api:admin@consize.dev",
+		Mode:             "approved",
+		Result:           store.EventApplied,
+		Diff: store.Diff{
+			Resource:      store.ResourceMemory,
+			CurrentReq:    1 << 30,
+			ProposedReq:   700 << 20,
+			CurrentLimit:  2 << 30,
+			ProposedLimit: 1400 << 20,
+		},
+		StepNumber: 1,
+		TotalSteps: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eventID == 0 {
+		t.Fatal("apply event id must be assigned")
+	}
+
+	followUpID, err := st.CreateFollowUpRecommendation(ctx, store.Recommendation{
+		WorkloadID:     wid,
+		Resource:       store.ResourceMemory,
+		CurrentValue:   700 << 20,
+		ProposedValue:  360 << 20,
+		CurrentLimit:   1400 << 20,
+		ProposedLimit:  720 << 20,
+		SavingsMonthly: 12,
+		Confidence:     0.9,
+		PolicyVersion:  "v1",
+		Status:         store.StatusPending,
+		StepNumber:     2,
+		TotalSteps:     3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, _, _, err := analyzeAll(ctx, st, pricing.DefaultStatic(), analysis.DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+
+	followUp, err := st.GetRecommendation(ctx, followUpID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if followUp.Status != store.StatusPending {
+		t.Fatalf("follow-up should survive analysis while apply is unverified, got %q", followUp.Status)
+	}
+
+	pending, _, err := st.ListRecommendations(ctx, &wid, store.StatusPending, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].ID != followUpID {
+		t.Fatalf("want only the original follow-up pending, got %+v", pending)
+	}
+}
+
+func TestAnalyzePreservesFollowUpAfterVerificationPasses(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemory()
+
+	wid, err := st.UpsertWorkload(ctx, store.Workload{
+		Name: "redis-cart", Namespace: "boutique", Source: "k8s",
+		RequestCPUMilli: 240, LimitCPUMilli: 2000,
+		RequestMemBytes: 700 << 20, LimitMemBytes: 1400 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	for d := 0; d < 5; d++ {
+		for i := 0; i < 96; i++ {
+			ts := base.Add(time.Duration(d*96+i) * 15 * time.Minute)
+			if err := st.UpsertBucket(ctx, store.Bucket{
+				WorkloadID: wid, Metric: store.MetricCPUMilli, WindowStart: ts,
+				P95: 200, P99: 220, Max: 250, Samples: 2,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.UpsertBucket(ctx, store.Bucket{
+				WorkloadID: wid, Metric: store.MetricMemBytes, WindowStart: ts,
+				P95: 300 * 1 << 20, P99: 320 * 1 << 20, Max: 400 * 1 << 20, Samples: 2,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	eventID, err := st.CreateApplyEvent(ctx, store.ApplyEvent{
+		RecommendationID: 101,
+		WorkloadID:       wid,
+		Actor:            "api:admin@consize.dev",
+		Mode:             "approved",
+		Result:           store.EventApplied,
+		Diff: store.Diff{
+			Resource:      store.ResourceMemory,
+			CurrentReq:    1 << 30,
+			ProposedReq:   700 << 20,
+			CurrentLimit:  2 << 30,
+			ProposedLimit: 1400 << 20,
+		},
+		StepNumber: 1,
+		TotalSteps: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateVerificationRun(ctx, store.VerificationRun{
+		ApplyEventID:  eventID,
+		BaselineStart: base,
+		BaselineEnd:   base.Add(time.Hour),
+		PostStart:     base.Add(time.Hour),
+		PostEnd:       base.Add(2 * time.Hour),
+		Verdict:       store.VerdictPassed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	followUpID, err := st.CreateFollowUpRecommendation(ctx, store.Recommendation{
+		WorkloadID:     wid,
+		Resource:       store.ResourceMemory,
+		CurrentValue:   700 << 20,
+		ProposedValue:  360 << 20,
+		CurrentLimit:   1400 << 20,
+		ProposedLimit:  720 << 20,
+		SavingsMonthly: 12,
+		Confidence:     0.9,
+		PolicyVersion:  "v1",
+		Status:         store.StatusPending,
+		StepNumber:     2,
+		TotalSteps:     3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, _, _, err := analyzeAll(ctx, st, pricing.DefaultStatic(), analysis.DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+
+	followUp, err := st.GetRecommendation(ctx, followUpID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if followUp.Status != store.StatusPending {
+		t.Fatalf("verified follow-up should survive analysis, got %q", followUp.Status)
+	}
+
+	pending, _, err := st.ListRecommendations(ctx, &wid, store.StatusPending, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].ID != followUpID {
+		t.Fatalf("want only the verified continuation pending, got %+v", pending)
+	}
+}
+
 // TestAnalyzeCommandPipelineDB is the M3 seeded-RDS acceptance case
 // (plan AC 1): a source="db" workload with the ADR-030 golden
 // utilization (t3.large at cpu 10%, mem 12.5%, 200 IOPS, 300

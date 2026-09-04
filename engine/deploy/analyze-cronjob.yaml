@@ -3,9 +3,9 @@
 # cluster identity (the API pod holds the write identity).
 #
 # CONSIZE_MIN_DATA_DAYS is the data-minimum confidence gate (ADR-024).
-# 0.1 is the value used by the live E2E — "any data within the window
-# suffices" — because this cluster's Prometheus is ephemeral (no PVC)
-# and no workload has long history. The shipped default is 5.
+# Production uses the shipped default posture: require five distinct days of
+# data before generating a recommendation. Lower this only for demos or new
+# fleet bootstrap.
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -30,7 +30,7 @@ spec:
                       name: consize-store
                       key: database-url
                 - name: CONSIZE_MIN_DATA_DAYS
-                  value: "0.1"
+                  value: "5"
               resources:
                 requests:
                   cpu: 50m

@@ -1,9 +1,9 @@
--- 0008_iac_plans_for_recommendations: make Terraform PR plans generic.
+-- 0008_iac_plans_for_recommendations: make IaC PR plans generic.
 --
 -- The initial IaC table was introduced for cloud-waste opportunities. The same
 -- workflow also applies to normal rightsizing recommendations: teams using
--- Terraform should be able to create a PR plan instead of directly patching the
--- cluster/cloud and creating drift.
+-- infrastructure-as-code should be able to create a PR plan instead of directly
+-- patching the cluster/cloud and creating drift.
 
 ALTER TABLE iac_pull_requests
     ALTER COLUMN opportunity_id DROP NOT NULL;

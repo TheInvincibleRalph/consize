@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"consize/internal/analysis"
+	"consize/internal/config"
 	"consize/internal/store"
 )
 
@@ -51,7 +52,8 @@ func (s *Service) VerifyDB(ctx context.Context, event store.ApplyEvent) (Verdict
 	}
 
 	applyTime := event.CreatedAt.UTC()
-	baseStart, baseEnd := applyTime.Add(-s.cfg.Window), applyTime
+	window := config.StepScaledDuration(s.cfg.Window, event.StepNumber)
+	baseStart, baseEnd := applyTime.Add(-window), applyTime
 	postStart, postEnd := applyTime, time.Now().UTC()
 
 	v := Verdict{SLIs: map[string]any{}, Thresholds: map[string]any{}}
@@ -81,7 +83,9 @@ func (s *Service) VerifyDB(ctx context.Context, event store.ApplyEvent) (Verdict
 		v.Inconclusive = true
 	}
 	v.Thresholds = map[string]any{
-		"window":            s.cfg.Window.String(),
+		"window":            window.String(),
+		"base_window":       s.cfg.Window.String(),
+		"step_number":       event.StepNumber,
 		"sustained_minutes": s.cfg.SustainedMinutes,
 		"db_step_minutes":   DBStepMinutes,
 		"cpu_cap_percent":   analysis.DBCPUCap,

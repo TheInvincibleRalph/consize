@@ -98,6 +98,13 @@ type Recommendation struct {
 	// for cpu/memory recommendations.
 	ClassCurrent  string
 	ClassProposed string
+
+	// StepNumber/TotalSteps preserve multi-step apply progress across
+	// follow-up recommendations. Fresh analyzer recommendations leave
+	// TotalSteps at 0 so the apply engine can compute the plan at apply
+	// time; follow-ups carry the original chain's next step and total.
+	StepNumber int
+	TotalSteps int
 }
 
 // Diff is one resource's before/after for a patch attempt — the
@@ -174,9 +181,26 @@ type CostOpportunity struct {
 	UpdatedAt      time.Time
 }
 
-// IaCPullRequest is the audit record for a Terraform PR workflow. The MVP
-// can return a planned PR/diff without pushing to a VCS provider; a future
-// GitHub/GitLab adapter will use the same shape when credentials are present.
+// CostAction is the insert-only action trail for unmanaged cloud-cost
+// findings. Unlike workload rightsizing, these resources may not have a
+// verification window, so the audit is attached directly to the opportunity:
+// requested before the provider call, then applied/dry_run/failed after it.
+type CostAction struct {
+	ID            int64
+	OpportunityID int64
+	Actor         string
+	Mode          string // dry_run | approved
+	Result        string // requested | dry_run | applied | failed
+	Message       string
+	Evidence      map[string]any
+	CreatedAt     time.Time
+}
+
+// IaCPullRequest is the audit record for an infrastructure-as-code PR workflow.
+// Provider identifies the source writer used for the change (for example
+// terraform, kubernetes-yaml, or helm-values). The MVP can return a planned
+// PR/diff without pushing to a VCS provider; the GitHub adapter uses the same
+// shape when credentials are present.
 type IaCPullRequest struct {
 	ID               int64
 	OpportunityID    int64
@@ -230,6 +254,14 @@ const (
 	EventPlanned  = "planned"  // dry-run evaluated, nothing touched
 	EventApplied  = "applied"  // patch sent to the cluster
 	EventReverted = "reverted" // rollback patch sent
+)
+
+// Cost action results.
+const (
+	CostActionRequested = "requested"
+	CostActionDryRun    = "dry_run"
+	CostActionApplied   = "applied"
+	CostActionFailed    = "failed"
 )
 
 // Verification verdicts.
@@ -410,6 +442,9 @@ type Store interface {
 	UpsertCostOpportunities(ctx context.Context, opportunities []CostOpportunity) error
 	ListCostOpportunities(ctx context.Context, status string) ([]CostOpportunity, error)
 	GetCostOpportunity(ctx context.Context, id int64) (CostOpportunity, error)
+	SetCostOpportunityStatus(ctx context.Context, id int64, status string) error
+	CreateCostAction(ctx context.Context, action CostAction) (CostAction, error)
+	ListCostActions(ctx context.Context, opportunityID *int64) ([]CostAction, error)
 	CreateIaCPullRequest(ctx context.Context, pr IaCPullRequest) (IaCPullRequest, error)
 	ListIaCPullRequests(ctx context.Context, opportunityID *int64) ([]IaCPullRequest, error)
 }

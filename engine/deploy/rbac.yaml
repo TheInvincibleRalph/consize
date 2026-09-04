@@ -1,34 +1,34 @@
-# Consize write identity (docs/security.md — Consize → k8s (write)).
+# Consize Kubernetes identities (docs/security.md).
 #
 # Least privilege by construction:
-#   - the Role is scoped to deployments ONLY: get/list/watch/update
+#   - consize-reader is cluster-wide read-only. It discovers workloads when
+#     CONSIZE_NAMESPACES is empty; it never writes.
+#   - consize-writer is NOT cluster-wide. Direct apply/rollback works only in
+#     namespaces where an operator creates the consize-apply RoleBinding.
+#   - the write Role is scoped to deployments ONLY: get/list/watch/update
 #     (the patcher is GET → mutate → Update guarded by resourceVersion;
 #     it never calls scale, never creates or deletes anything, never
 #     touches secrets or RBAC objects)
-#   - RoleBindings are per-namespace and exist ONLY for namespaces
-#     carrying the auto-apply opt-in label
-#     (consize.savings.dev/auto-apply=enabled) — never cluster-wide
+#   - approved direct apply needs the RoleBinding; auto apply additionally
+#     requires the namespace label consize.savings.dev/auto-apply=enabled
 #   - the same identity drives apply AND verify/rollback (one write
 #     surface, ADR-021)
 #
 # NOTE: security.md originally listed `patch deployments` — the guarded
 # UPDATE needs the `update` verb, which is all this Role grants.
 #
-# The collector's read identity (consize-reader) is deployed by the
-# stack wiring (tests/e2e-live/namespace.yaml): a read-only Role bound
-# per analyzed namespace. It lists workloads it ingests and never writes.
-#
-# Applying:
+# Applying direct-write scope:
 #   kubectl apply -f deploy/rbac.yaml
-#   # for each auto-apply namespace (label it first, then bind). The
-#   # Role must be recreated in the namespace: RoleRefs resolve in the
-#   # binding's namespace only (tests/e2e-live/namespace.yaml has the
-#   # full per-namespace pair).
-#   kubectl label ns <ns> consize.savings.dev/auto-apply=enabled
+#   # for each namespace where Direct apply is allowed:
 #   kubectl create role consize-apply -n <ns> \
 #     --verb=get,list,watch,update --resource=deployments
 #   kubectl create rolebinding consize-apply -n <ns> \
 #     --serviceaccount=consize-system:consize-writer --role=consize-apply
+#   # optional, only if mode=auto should be allowed there:
+#   kubectl label ns <ns> consize.savings.dev/auto-apply=enabled
+#
+# IaC PR mode does not require Kubernetes write RBAC. It needs only the GitHub
+# integration token mounted in the API pod.
 ---
 apiVersion: v1
 kind: Namespace
@@ -43,14 +43,43 @@ metadata:
   name: consize-writer
   namespace: consize-system
 ---
-# Collector read identity — read-only; bound per analyzed namespace
-# (tests/e2e-live/namespace.yaml), never cluster-wide.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: consize-reader
   namespace: consize-system
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: consize-read
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: consize-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: consize-read
+subjects:
+  - kind: ServiceAccount
+    name: consize-reader
+    namespace: consize-system
+---
+# Template/example Role for namespaces that allow Direct apply. This object is
+# namespaced, so it only grants writes inside consize-system. Create the same
+# Role + RoleBinding in each workload namespace that opts into Direct apply.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

@@ -157,7 +157,7 @@ func (s *Service) Apply(ctx context.Context, recID int64, mode, actor string) (R
 		return res, err
 	}
 	res.Diff = diff
-	res.StepNumber = steps.completed + 1
+	res.StepNumber = steps.number
 	res.TotalSteps = steps.total
 
 	// 6. Concurrency.
@@ -289,7 +289,8 @@ func (s *Service) stepPlan(rec store.Recommendation) (store.Diff, stepInfo, *sto
 		return store.Diff{}, stepInfo{}, nil, errors.New("nothing to reduce (downsize-only)")
 	}
 
-	stepReq, stepLim, total := s.stepValues(curReq, curLim, targetReq, targetLim)
+	stepReq, stepLim, remainingSteps := s.stepValues(curReq, curLim, targetReq, targetLim)
+	step := recommendationStep(rec, remainingSteps)
 	diff := store.Diff{
 		Resource:   rec.Resource,
 		CurrentReq: curReq, ProposedReq: stepReq,
@@ -306,11 +307,13 @@ func (s *Service) stepPlan(rec store.Recommendation) (store.Diff, stepInfo, *sto
 		next.ProposedValue = targetReq
 		next.CurrentLimit = stepLim
 		next.ProposedLimit = targetLim
+		next.StepNumber = step.number + 1
+		next.TotalSteps = step.total
 		// The remainder's savings scale with its request reduction share.
 		next.SavingsMonthly = savingsOf(rec.SavingsMonthly, stepReq, targetReq, curReq)
 		followUp = &next
 	}
-	return diff, stepInfo{completed: 0, total: total}, followUp, nil
+	return diff, step, followUp, nil
 }
 
 // stepValues applies the step limit to (request, limit) toward targets.
@@ -355,8 +358,20 @@ func savingsOf(total float64, stepReq, finalReq, curReq int64) float64 {
 }
 
 type stepInfo struct {
-	completed int
-	total     int
+	number int
+	total  int
+}
+
+func recommendationStep(rec store.Recommendation, remainingSteps int) stepInfo {
+	number := rec.StepNumber
+	if number <= 0 {
+		number = 1
+	}
+	total := rec.TotalSteps
+	if total < number {
+		total = number + remainingSteps - 1
+	}
+	return stepInfo{number: number, total: total}
 }
 
 func actorOr(actor, def string) string {

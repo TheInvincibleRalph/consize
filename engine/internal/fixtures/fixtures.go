@@ -39,6 +39,13 @@ func Workloads() []analysis.Workload {
 		steady("legacy-reporting", "analytics", "deployment", 2048, 4096, 500, 1000, 2048, 0, 500, 0, rng, -1),
 		// Mid-sized recommendation.
 		steady("image-processor", "media", "deployment", 4096, 8192, 2000, 4000, 2500, 50, 800, 30, rng, -1),
+		// Repo-managed Online Boutique example for testing the Kubernetes YAML
+		// PR workflow against the devops-portfolio repository.
+		withLabel(steady("redis-cart", "boutique", "deployment", 140, 179, 70, 125, 8, 2, 15, 3, rng, -1), "consize.dev/container", "redis"),
+		// Vendored Online Boutique example with no local overlay. This proves
+		// Consize can patch the repo-owned upstream manifest when an overlay
+		// patch does not exist yet.
+		withLabel(steady("recommendationservice", "boutique", "deployment", 220, 450, 100, 200, 45, 4, 28, 5, rng, -1), "consize.dev/container", "server"),
 
 		// Skipped by policy:
 		withLabel(steady("crypto-miner-ha", "apps", "deployment", 8192, 16384, 2000, 4000, 100, 10, 40, 5, rng, -1), excludeLabel, "true"),

@@ -18,7 +18,7 @@ func Str(key, def string) string {
 	return def
 }
 
-// Duration returns the env value as a duration ("15m", "24h") or def.
+// Duration returns the env value as a duration ("15m", "1h") or def.
 func Duration(key string, def time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -26,6 +26,16 @@ func Duration(key string, def time.Duration) time.Duration {
 		}
 	}
 	return def
+}
+
+// StepScaledDuration returns the observation window for an apply step.
+// Step 1 uses the base duration, step 2 uses 2x, and so on. Missing or
+// malformed step numbers fail to the safest first-step behavior.
+func StepScaledDuration(base time.Duration, step int) time.Duration {
+	if step < 1 {
+		step = 1
+	}
+	return base * time.Duration(step)
 }
 
 // Int returns the env value as an int or def.

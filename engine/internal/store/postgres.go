@@ -271,6 +271,7 @@ func (p *Postgres) CreateRecommendations(ctx context.Context, recs []Recommendat
 	defer tx.Rollback(ctx)
 
 	for _, r := range recs {
+		r = normalizeRecommendationSteps(r)
 		if _, err := tx.Exec(ctx, `
 			UPDATE recommendations SET status = $1
 			WHERE workload_id = $2 AND resource = $3 AND status = $4`,
@@ -282,12 +283,12 @@ func (p *Postgres) CreateRecommendations(ctx context.Context, recs []Recommendat
 				(workload_id, resource, current_value, proposed_value,
 				 current_limit, proposed_limit,
 				 savings_monthly, confidence, policy_version, status,
-				 class_current, class_proposed)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+				 class_current, class_proposed, step_number, total_steps)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 			r.WorkloadID, r.Resource, r.CurrentValue, r.ProposedValue,
 			r.CurrentLimit, r.ProposedLimit,
 			r.SavingsMonthly, r.Confidence, r.PolicyVersion, orDefault(r.Status, StatusPending),
-			r.ClassCurrent, r.ClassProposed); err != nil {
+			r.ClassCurrent, r.ClassProposed, r.StepNumber, r.TotalSteps); err != nil {
 			return err
 		}
 	}
@@ -297,14 +298,14 @@ func (p *Postgres) CreateRecommendations(ctx context.Context, recs []Recommendat
 const recCols = `r.id, r.workload_id, w.name, w.namespace, r.resource,
 	r.current_value, r.proposed_value, r.current_limit, r.proposed_limit,
 	r.savings_monthly, r.confidence, r.policy_version, r.status, r.created_at,
-	r.class_current, r.class_proposed`
+	r.class_current, r.class_proposed, r.step_number, r.total_steps`
 
 func scanRecommendation(row pgx.Row) (Recommendation, error) {
 	var r Recommendation
 	if err := row.Scan(&r.ID, &r.WorkloadID, &r.WorkloadName, &r.Namespace,
 		&r.Resource, &r.CurrentValue, &r.ProposedValue, &r.CurrentLimit, &r.ProposedLimit,
 		&r.SavingsMonthly, &r.Confidence, &r.PolicyVersion, &r.Status, &r.CreatedAt,
-		&r.ClassCurrent, &r.ClassProposed); err != nil {
+		&r.ClassCurrent, &r.ClassProposed, &r.StepNumber, &r.TotalSteps); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Recommendation{}, ErrNotFound
 		}
@@ -367,20 +368,21 @@ func (p *Postgres) PruneRecommendations(ctx context.Context, status string, cuto
 }
 
 func (p *Postgres) CreateFollowUpRecommendation(ctx context.Context, r Recommendation) (int64, error) {
+	r = normalizeRecommendationSteps(r)
 	const q = `
 		INSERT INTO recommendations
 			(workload_id, resource, current_value, proposed_value,
 			 current_limit, proposed_limit,
 			 savings_monthly, confidence, policy_version, status,
-			 class_current, class_proposed)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			 class_current, class_proposed, step_number, total_steps)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING id`
 	var id int64
 	err := p.pool.QueryRow(ctx, q,
 		r.WorkloadID, r.Resource, r.CurrentValue, r.ProposedValue,
 		r.CurrentLimit, r.ProposedLimit,
 		r.SavingsMonthly, r.Confidence, r.PolicyVersion, orDefault(r.Status, StatusPending),
-		r.ClassCurrent, r.ClassProposed).Scan(&id)
+		r.ClassCurrent, r.ClassProposed, r.StepNumber, r.TotalSteps).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("create follow-up recommendation: %w", err)
 	}
@@ -418,6 +420,16 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+func normalizeRecommendationSteps(r Recommendation) Recommendation {
+	if r.StepNumber <= 0 {
+		r.StepNumber = 1
+	}
+	if r.TotalSteps < 0 {
+		r.TotalSteps = 0
+	}
+	return r
 }
 
 // --- M2 audit trail ---
@@ -794,6 +806,73 @@ func (p *Postgres) ListCostOpportunities(ctx context.Context, status string) ([]
 
 func (p *Postgres) GetCostOpportunity(ctx context.Context, id int64) (CostOpportunity, error) {
 	return scanCostOpportunity(p.pool.QueryRow(ctx, `SELECT `+costOpportunityCols+` FROM cost_opportunities WHERE id = $1`, id))
+}
+
+func (p *Postgres) SetCostOpportunityStatus(ctx context.Context, id int64, status string) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE cost_opportunities SET status = $2, updated_at = now() WHERE id = $1`, id, status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (p *Postgres) CreateCostAction(ctx context.Context, action CostAction) (CostAction, error) {
+	if action.Evidence == nil {
+		action.Evidence = map[string]any{}
+	}
+	evidenceJSON, err := json.Marshal(action.Evidence)
+	if err != nil {
+		return action, fmt.Errorf("encode cost action evidence: %w", err)
+	}
+	action.Mode = orDefault(action.Mode, "dry_run")
+	action.Result = orDefault(action.Result, CostActionRequested)
+	if err := p.pool.QueryRow(ctx, `
+		INSERT INTO cost_actions
+			(opportunity_id, actor, mode, result, message, evidence)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, created_at`,
+		action.OpportunityID, action.Actor, action.Mode, action.Result, action.Message, evidenceJSON,
+	).Scan(&action.ID, &action.CreatedAt); err != nil {
+		return action, fmt.Errorf("create cost action: %w", err)
+	}
+	return action, nil
+}
+
+func (p *Postgres) ListCostActions(ctx context.Context, opportunityID *int64) ([]CostAction, error) {
+	q := `SELECT id, opportunity_id, actor, mode, result, message, evidence, created_at
+	      FROM cost_actions WHERE 1=1`
+	args := []any{}
+	if opportunityID != nil {
+		args = append(args, *opportunityID)
+		q += fmt.Sprintf(" AND opportunity_id = $%d", len(args))
+	}
+	q += ` ORDER BY created_at DESC`
+	rows, err := p.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []CostAction{}
+	for rows.Next() {
+		var action CostAction
+		var evidenceJSON []byte
+		if err := rows.Scan(&action.ID, &action.OpportunityID, &action.Actor, &action.Mode, &action.Result, &action.Message, &evidenceJSON, &action.CreatedAt); err != nil {
+			return nil, err
+		}
+		if len(evidenceJSON) > 0 {
+			if err := json.Unmarshal(evidenceJSON, &action.Evidence); err != nil {
+				return nil, fmt.Errorf("decode cost action evidence: %w", err)
+			}
+		}
+		if action.Evidence == nil {
+			action.Evidence = map[string]any{}
+		}
+		out = append(out, action)
+	}
+	return out, rows.Err()
 }
 
 func (p *Postgres) CreateIaCPullRequest(ctx context.Context, pr IaCPullRequest) (IaCPullRequest, error) {

@@ -194,13 +194,13 @@ func (s *Service) Apply(ctx context.Context, recID int64, mode, actor string) (R
 
 	// 6. One class step: the applied class is the adjacent catalog step
 	// toward the target; the remainder becomes a follow-up.
-	diff, total, followUp, err := s.stepPlan(rec)
+	diff, step, followUp, err := s.stepPlan(rec)
 	if err != nil {
 		return res, err
 	}
 	res.Diff = diff
-	res.StepNumber = 1
-	res.TotalSteps = total
+	res.StepNumber = step.number
+	res.TotalSteps = step.total
 
 	// 7. Concurrency.
 	if active, err := s.st.ActiveApplyInNamespace(ctx, wl.Namespace); err != nil {
@@ -312,17 +312,17 @@ func guardExclusions(wl store.Workload) []string {
 // stepPlan computes this apply's class (one adjacent catalog step toward
 // the target) and the follow-up recommendation that continues when the
 // target is farther. Downsize-only, like the k8s policy.
-func (s *Service) stepPlan(rec store.Recommendation) (store.Diff, int, *store.Recommendation, error) {
+func (s *Service) stepPlan(rec store.Recommendation) (store.Diff, stepInfo, *store.Recommendation, error) {
 	curIdx := classIndex(rec.ClassCurrent)
 	if curIdx < 0 {
-		return store.Diff{}, 0, nil, errors.New("unknown current class " + rec.ClassCurrent)
+		return store.Diff{}, stepInfo{}, nil, errors.New("unknown current class " + rec.ClassCurrent)
 	}
 	targetIdx := classIndex(rec.ClassProposed)
 	if targetIdx < 0 {
-		return store.Diff{}, 0, nil, errors.New("unknown proposed class " + rec.ClassProposed)
+		return store.Diff{}, stepInfo{}, nil, errors.New("unknown proposed class " + rec.ClassProposed)
 	}
 	if targetIdx >= curIdx {
-		return store.Diff{}, 0, nil, errors.New("nothing to reduce (downsize-only)")
+		return store.Diff{}, stepInfo{}, nil, errors.New("nothing to reduce (downsize-only)")
 	}
 
 	adjacent, ok := analysis.DBClassStep(rec.ClassCurrent) // one step toward the target
@@ -330,8 +330,9 @@ func (s *Service) stepPlan(rec store.Recommendation) (store.Diff, int, *store.Re
 		// Unknown or already-cheapest class: unreachable for healthy
 		// recommendations (dbSizing never proposes a class with no
 		// cheaper step), but fail closed.
-		return store.Diff{}, 0, nil, errors.New("no cheaper class step from " + rec.ClassCurrent)
+		return store.Diff{}, stepInfo{}, nil, errors.New("no cheaper class step from " + rec.ClassCurrent)
 	}
+	step := recommendationStep(rec, curIdx-targetIdx)
 	diff := store.Diff{
 		Resource:      store.ResourceClass,
 		ClassCurrent:  rec.ClassCurrent,
@@ -344,11 +345,30 @@ func (s *Service) stepPlan(rec store.Recommendation) (store.Diff, int, *store.Re
 		next.ID = 0
 		next.Status = store.StatusPending
 		next.ClassCurrent = adjacent.Name
+		next.StepNumber = step.number + 1
+		next.TotalSteps = step.total
 		// The remainder's savings are the price difference it will close.
 		next.SavingsMonthly = adjacent.PriceUSD - classPrice(rec.ClassProposed)
 		followUp = &next
 	}
-	return diff, curIdx - targetIdx, followUp, nil
+	return diff, step, followUp, nil
+}
+
+type stepInfo struct {
+	number int
+	total  int
+}
+
+func recommendationStep(rec store.Recommendation, remainingSteps int) stepInfo {
+	number := rec.StepNumber
+	if number <= 0 {
+		number = 1
+	}
+	total := rec.TotalSteps
+	if total < number {
+		total = number + remainingSteps - 1
+	}
+	return stepInfo{number: number, total: total}
 }
 
 // classIndex returns the catalog index of a class, or -1.
