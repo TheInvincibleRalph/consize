@@ -54,4 +54,4 @@ For a deeper dive into how Consize works, check out the documentation:
 
 ## License
 
-MIT
+Apache 2.0
