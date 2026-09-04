@@ -109,6 +109,172 @@ func main() {
 	}
 	fmt.Printf("seeded %d workloads, %d database instances, %d recommendations, $%.2f/mo projected\n",
 		len(k8s), len(dbInstances), len(recs), total)
+
+	// Seed some history for the demo so the dashboard isn't completely blank
+	seedHistory(ctx, st)
+
+	// Seed cloud waste (cost opportunities)
+	seedWaste(ctx, st)
+}
+
+func seedWaste(ctx context.Context, st store.Store) {
+	now := time.Now().UTC()
+	opps := []store.CostOpportunity{
+		{
+			Provider:       "aws",
+			Account:        "production (123456789012)",
+			Region:         "us-east-1",
+			ResourceType:   "ebs",
+			ResourceID:     "vol-0abcd1234efgh5678",
+			Name:           "old-analytics-db-data",
+			MonthlyCost:    120.00,
+			Recommendation: "Delete unattached EBS volume",
+			Action:         "delete",
+			Risk:           "low",
+			Status:         "open",
+			FirstSeenAt:    now.Add(-30 * 24 * time.Hour),
+			LastSeenAt:     now,
+		},
+		{
+			Provider:       "aws",
+			Account:        "staging (098765432109)",
+			Region:         "us-west-2",
+			ResourceType:   "elastic_ip",
+			ResourceID:     "eipalloc-01234567",
+			Name:           "34.210.X.X",
+			MonthlyCost:    3.65,
+			Recommendation: "Release unused Elastic IP",
+			Action:         "release",
+			Risk:           "low",
+			Status:         "open",
+			FirstSeenAt:    now.Add(-15 * 24 * time.Hour),
+			LastSeenAt:     now,
+		},
+		{
+			Provider:       "gcp",
+			Account:        "consize-staging",
+			Region:         "us-central1",
+			ResourceType:   "compute_disk",
+			ResourceID:     "disk-abandoned-ci-runner",
+			Name:           "disk-abandoned-ci-runner",
+			MonthlyCost:    45.50,
+			Recommendation: "Delete unattached disk",
+			Action:         "delete",
+			Risk:           "low",
+			Status:         "open",
+			FirstSeenAt:    now.Add(-60 * 24 * time.Hour),
+			LastSeenAt:     now,
+		},
+	}
+
+	if err := st.UpsertCostOpportunities(ctx, opps); err != nil {
+		log.Printf("seed waste error: %v", err)
+	} else {
+		fmt.Printf("seeded %d cloud waste opportunities\n", len(opps))
+	}
+}
+
+func seedHistory(ctx context.Context, st store.Store) {
+	// Fetch all recommendations
+	recs, _, err := st.ListRecommendations(ctx, nil, "", 100, 0)
+	if err != nil {
+		log.Printf("seed history: list recs error: %v", err)
+		return
+	}
+
+	// Find the recommendation for payments-service (or inventory-service if payments not found)
+	var targetRec store.Recommendation
+	found := false
+	for _, r := range recs {
+		// Just grab the first one that has substantial savings but isn't checkout-api
+		if r.SavingsMonthly > 5.0 && r.Resource == "memory" {
+			wl, _ := st.GetWorkload(ctx, r.WorkloadID)
+			if wl.Name == "payments-service" {
+				targetRec = r
+				found = true
+				break
+			}
+		}
+	}
+
+	if !found {
+		return
+	}
+
+	// Create an ApplyEvent for it in the past (e.g. 2 hours ago)
+	applyTime := time.Now().UTC().Add(-2 * time.Hour)
+	diff := store.Diff{
+		Resource:        targetRec.Resource,
+		CurrentReq:      targetRec.CurrentValue,
+		ProposedReq:     targetRec.ProposedValue,
+		CurrentLimit:    targetRec.CurrentLimit,
+		ProposedLimit:   targetRec.ProposedLimit,
+	}
+	
+	applyID, err := st.CreateApplyEvent(ctx, store.ApplyEvent{
+		RecommendationID: targetRec.ID,
+		WorkloadID:       targetRec.WorkloadID,
+		Actor:            "Alex (DevOps)",
+		Mode:             "approved",
+		Result:           "applied",
+		Diff:             diff,
+		StepNumber:       1,
+		TotalSteps:       2,
+		CreatedAt:        applyTime,
+	})
+	if err != nil {
+		log.Printf("seed history: create apply event error: %v", err)
+		return
+	}
+
+	// Create a VerificationRun (Passed) 1 hour ago
+	verifyTime := time.Now().UTC().Add(-1 * time.Hour)
+	err = st.CreateVerificationRun(ctx, store.VerificationRun{
+		ApplyEventID:  applyID,
+		Verdict:       "passed",
+		BaselineStart: applyTime.Add(-10 * time.Minute),
+		BaselineEnd:   applyTime,
+		PostStart:     applyTime,
+		PostEnd:       verifyTime,
+		SLIs: map[string]any{
+			"oom_killed": map[string]any{"signal": "oom_killed", "verdict": "passed"},
+			"restarts":   map[string]any{"signal": "restarts", "verdict": "passed"},
+		},
+		Thresholds: map[string]any{
+			"window": "1h",
+		},
+		CreatedAt: verifyTime,
+	})
+	if err != nil {
+		log.Printf("seed history: create verification run error: %v", err)
+		return
+	}
+
+	// Update the recommendation status to verified
+	_ = st.SetRecommendationStatus(ctx, targetRec.ID, store.StatusVerified)
+
+	// Create a follow-up recommendation (Step 2)
+	finalValue := int64(float64(targetRec.ProposedValue) * 0.8) // Some arbitrary further reduction
+	finalLimit := int64(float64(targetRec.ProposedLimit) * 0.8)
+	_, err = st.CreateFollowUpRecommendation(ctx, store.Recommendation{
+		WorkloadID:     targetRec.WorkloadID,
+		Resource:       targetRec.Resource,
+		CurrentValue:   targetRec.ProposedValue,
+		ProposedValue:  finalValue,
+		CurrentLimit:   targetRec.ProposedLimit,
+		ProposedLimit:  finalLimit,
+		SavingsMonthly: 12.50,
+		Confidence:     0.9,
+		PolicyVersion:  targetRec.PolicyVersion,
+		Status:         store.StatusPending,
+		StepNumber:     2,
+		TotalSteps:     2,
+	})
+	if err != nil {
+		log.Printf("seed history: create follow up error: %v", err)
+	}
+
+	fmt.Printf("seeded historical apply event (ID: %d), verification run, and continuation for workload %d\n", applyID, targetRec.WorkloadID)
 }
 
 func freshWorkloads(in []analysis.Workload, start time.Time) []analysis.Workload {
