@@ -46,10 +46,10 @@ helm install consize ./charts/consize \
 
 For a deeper dive into how Consize works, check out the documentation:
 
-- [Vision & The Safety Net](docs/VISION.md)
+- [Vision & The Safety Net](VISION.md)
 - [Customer Guide & Operating Model](docs/customer-guide.md)
 - [Architecture & Data Flow](docs/architecture.md)
-- [Security & Least Privilege](docs/security.md)
+- [Security & Least Privilege](SECURITY.md)
 - [Decisions & ADR Log](docs/decisions.md)
 
 ## License
