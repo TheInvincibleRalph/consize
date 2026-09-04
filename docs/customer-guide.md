@@ -370,16 +370,19 @@ serviceAccounts:
 <details>
 <summary><strong>How to create the GCP Workload Identity Role (CLI)</strong></summary>
 
-If you haven't created the Cloud IAM role yet, you can do so quickly using the `gcloud` CLI. This creates the role, gives it read-only permissions, and binds it to the Kubernetes ServiceAccount that Helm will create (`consize-system/consize-reader`).
+If you haven't created the Cloud IAM role yet, you can do so quickly using the `gcloud` CLI. This creates the role, grants the exact read-only permissions Consize needs, and binds it to the Kubernetes ServiceAccount that Helm will create (`consize-system/consize-reader`).
 
 ```sh
 # 1. Create the Google Cloud Service Account (GSA)
 gcloud iam service-accounts create consize-scanner --project=PROJECT_ID
 
-# 2. Grant the GSA read-only permissions (e.g., Compute Viewer for cloud-waste)
+# 2. Grant the GSA the specific read-only permissions for Cloud Waste and Cloud SQL
 gcloud projects add-iam-policy-binding PROJECT_ID \
     --member="serviceAccount:consize-scanner@PROJECT_ID.iam.gserviceaccount.com" \
     --role="roles/compute.viewer"
+gcloud projects add-iam-policy-binding PROJECT_ID \
+    --member="serviceAccount:consize-scanner@PROJECT_ID.iam.gserviceaccount.com" \
+    --role="roles/cloudsql.viewer"
 
 # 3. Bind the GSA to the Kubernetes ServiceAccount (KSA)
 gcloud iam service-accounts add-iam-policy-binding consize-scanner@PROJECT_ID.iam.gserviceaccount.com \
@@ -388,6 +391,47 @@ gcloud iam service-accounts add-iam-policy-binding consize-scanner@PROJECT_ID.ia
     --project=PROJECT_ID
 ```
 </details>
+
+<details>
+<summary><strong>How to create the AWS IRSA Role (CLI)</strong></summary>
+
+If you are running on EKS, you can use the `aws` and `eksctl` CLIs to create an IAM role with the exact read-only permissions required, without conflicting with the Helm chart.
+
+```sh
+# 1. Create the IAM policy with required read-only permissions
+cat <<POLICY > consize-policy.json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeInstances",
+                "ec2:DescribeVolumes",
+                "ec2:DescribeAddresses",
+                "rds:DescribeDBInstances"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+POLICY
+
+aws iam create-policy \
+    --policy-name ConsizeCloudScannerPolicy \
+    --policy-document file://consize-policy.json
+
+# 2. Create the IAM Role tied to the Consize ServiceAccount (using --role-only to let Helm manage the K8s SA)
+eksctl create iamserviceaccount \
+    --name consize-reader \
+    --namespace consize-system \
+    --cluster YOUR_CLUSTER_NAME \
+    --attach-policy-arn arn:aws:iam::YOUR_ACCOUNT_ID:policy/ConsizeCloudScannerPolicy \
+    --approve \
+    --role-only
+```
+</details>
+
 
 Alternatively, if you do not use Workload Identity, you can provide a static JSON key file via a secret:
 
