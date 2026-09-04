@@ -243,3 +243,16 @@ containerSecurityContext:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# Built-in Postgres (enabled by default)
+# If enabled, Consize provisions a lightweight Postgres database automatically.
+# Set to false to use an external Postgres database (requires database.existingSecret).
+postgresql:
+  enabled: true
+  auth:
+    username: consize
+    database: consize
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi

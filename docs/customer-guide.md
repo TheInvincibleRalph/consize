@@ -319,8 +319,7 @@ You need:
 
 - a Kubernetes cluster;
 - Prometheus or a compatible query endpoint with workload metrics;
-- Postgres for durable storage;
-- a namespace for Consize, usually `consize-system`;
+
 - optional cloud provider credentials for database metrics and cloud-waste scanning;
 - optional GitHub and Slack secrets.
 
@@ -334,9 +333,10 @@ kubectl create namespace consize-system
 
 ```sh
 kubectl -n consize-system create secret generic consize-store \
-  --from-literal=database-url='postgres://USER:PASSWORD@HOST:5432/consize?sslmode=require' \
   --from-literal=prometheus-url='http://prometheus-operated.monitoring:9090'
 ```
+
+*Note: Consize provisions a lightweight Postgres database automatically. To use an external Postgres database, set `postgresql.enabled=false` in your values and provide a `database-url` in the secret.*
 
 Optional Slack webhook:
 

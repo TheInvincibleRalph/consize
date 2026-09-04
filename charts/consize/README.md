@@ -18,15 +18,16 @@ Consize uses the same installation shape expected from production Kubernetes too
 
 ## Install
 
-Create the required store secret:
+Create the required Prometheus secret:
 
 ```sh
 kubectl create namespace consize-system
 
 kubectl -n consize-system create secret generic consize-store \
-  --from-literal=database-url='postgres://USER:PASSWORD@HOST:5432/consize?sslmode=require' \
   --from-literal=prometheus-url='http://prometheus-operated.monitoring:9090'
 ```
+
+*Note: Consize provisions a lightweight Postgres database automatically by default. If you prefer to use an external database, set `postgresql.enabled=false` and include `--from-literal=database-url=...` in the secret above.*
 
 Optional integration secrets:
 

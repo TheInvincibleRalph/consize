@@ -81,11 +81,21 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
 {{- define "consize.databaseEnv" -}}
+{{- if .Values.postgresql.enabled }}
+- name: POSTGRES_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "consize.fullname" . }}-postgresql
+      key: postgres-password
+- name: DATABASE_URL
+  value: postgres://{{ .Values.postgresql.auth.username }}:$(POSTGRES_PASSWORD)@{{ include "consize.fullname" . }}-postgresql:5432/{{ .Values.postgresql.auth.database }}?sslmode=disable
+{{- else }}
 - name: DATABASE_URL
   valueFrom:
     secretKeyRef:
-      name: {{ required "database.existingSecret is required" .Values.database.existingSecret }}
+      name: {{ required "database.existingSecret is required when postgresql.enabled is false" .Values.database.existingSecret }}
       key: {{ .Values.database.keys.databaseUrl }}
+{{- end }}
 {{- end -}}
 
 {{- define "consize.prometheusEnv" -}}

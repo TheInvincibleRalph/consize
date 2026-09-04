@@ -2,7 +2,7 @@ apiVersion: v2
 name: consize
 description: Safe Kubernetes and cloud cost optimization with guarded apply, verification, rollback, and IaC PR workflows.
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "0.1.0"
 keywords:
   - finops
@@ -15,3 +15,8 @@ sources:
   - https://github.com/TheInvincibleRalph/consize
 maintainers:
   - name: Consize
+dependencies:
+  - name: postgresql
+    version: 15.5.0
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
