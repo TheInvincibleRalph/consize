@@ -307,19 +307,40 @@
       el('div', { class: 'panel-body' }, body));
   }
 
-  function recentAppliesTable(applies, nameOf) {
+  function continuationFor(event, recs) {
+    var resource = event.Diff && event.Diff.resource;
+    if (!resource) return null;
+    for (var i = 0; i < recs.length; i++) {
+      var r = recs[i];
+      if (r.Status !== 'pending') continue;
+      if (r.WorkloadID !== event.WorkloadID) continue;
+      if (r.Resource !== resource) continue;
+      if (resource === 'class' && r.ClassCurrent === event.Diff.proposed_class) return r;
+      if (resource !== 'class' && Number(r.CurrentValue) === Number(event.Diff.proposed_request)) return r;
+    }
+    return null;
+  }
+
+  function recentAppliesTable(applies, nameOf, runsByEvent, pendingRecs) {
     if (!applies.length) return emptyState('No apply events yet.');
     return el('div', { class: 'tbl-wrap' },
       el('table', {},
-        theadRow([{ label: 'Event' }, { label: 'Workload' }, { label: 'Result' }, { label: 'Step' }, { label: 'Actor' }, { label: 'Created' }]),
+        theadRow([{ label: 'Event' }, { label: 'Workload' }, { label: 'Result' }, { label: 'Step' }, { label: 'Actor' }, { label: 'Created' }, { label: 'Next' }]),
         el('tbody', {}, applies.map(function (e) {
+          var run = runsByEvent && runsByEvent.get(e.ID);
+          var hasMoreSteps = e.Result === 'applied' && e.StepNumber > 0 && e.TotalSteps > e.StepNumber;
+          var next = run && run.Verdict === 'passed' && hasMoreSteps ? continuationFor(e, pendingRecs || []) : null;
           return el('tr', {},
             td('mono muted', '#' + e.ID),
             td(undefined, nameOf(e.WorkloadID)),
             td(undefined, resultBadge(e.Result)),
             td('mono muted', e.StepNumber + '/' + e.TotalSteps),
             td('muted', e.Actor),
-            td('muted', fmtTime(e.CreatedAt)));
+            td('muted', fmtTime(e.CreatedAt)),
+            td(undefined, next
+              ? el('button', { class: 'btn small', onclick: function () { openApplyModal(next); } },
+                  'Continue step ' + (e.StepNumber + 1) + '/' + e.TotalSteps)
+              : el('span', { class: 'muted' }, hasMoreSteps && !run ? 'Safety check' : '—')));
         }))));
   }
 
@@ -379,12 +400,19 @@
 
   function renderDashboard(root) {
     root.replaceChildren(loadingState('Loading dashboard…'));
-    return Promise.all([api.savings(), api.workloads(), api.applies(), api.verificationRuns()])
+    return Promise.all([
+      api.savings(),
+      api.workloads(),
+      api.applies(),
+      api.verificationRuns(),
+      api.recommendations({ status: 'pending', limit: 100 })
+    ])
       .then(function (results) {
         var sav = results[0] || {};
         var workloads = results[1] || [];
         var applies = results[2] || [];
         var runs = results[3] || [];
+        var pendingRecs = (results[4] && results[4].recommendations) || [];
 
         var projected = pick(sav, ['projected_monthly_savings', 'projected_monthly', 'projected']);
         var realized = pick(sav, ['realized_monthly_savings', 'realized_monthly', 'realized_savings_monthly']);
@@ -393,6 +421,8 @@
 
         var names = new Map(workloads.map(function (w) { return [w.ID, w.Namespace + '/' + w.Name]; }));
         var nameOf = function (id) { return names.get(id) || 'workload #' + id; };
+        var runsByEvent = new Map();
+        runs.forEach(function (r) { runsByEvent.set(r.ApplyEventID, r); });
 
         var kids = [
           pageHead('Dashboard', 'Rightsizing with a safety engine — every recommendation is applied, verified, and audited.'),
@@ -409,7 +439,7 @@
         var ownerRows = byOwnerRows(byOwner);
         if (ownerRows.length) kids.push(byOwnerCard(ownerRows));
         kids.push(el('div', { class: 'panels' },
-          panel('Recent apply events', '#/audit', recentAppliesTable(applies.slice(0, 8), nameOf)),
+          panel('Recent apply events', '#/audit', recentAppliesTable(applies.slice(0, 8), nameOf, runsByEvent, pendingRecs)),
           panel('Recent verification runs', '#/audit', recentRunsTable(runs.slice(0, 8)))));
         root.replaceChildren.apply(root, kids);
       }, function (err) {
@@ -678,7 +708,7 @@
         parts.push(blockedBox('Apply blocked', b.BlockReasons));
       } else {
         // Step plan: "step 1 of 4 — large" (short class family for class
-        // applies; the remainder continues as a follow-up recommendation).
+        // applies).
         if (b.StepNumber || b.TotalSteps) {
           var text = 'Step ' + b.StepNumber + ' of ' + b.TotalSteps;
           if (b.Diff && b.Diff.resource === 'class' && b.Diff.proposed_class) {
@@ -694,10 +724,7 @@
             b.Window ? ' (' + b.Window + ')' : ''));
         }
         if (b.DryRun) parts.push(el('p', { class: 'ok' }, 'Dry run — nothing was changed.'));
-        if (b.Applied) parts.push(el('p', { class: 'ok' }, 'Applied.'));
-        if (b.FollowUpID > 0) {
-          parts.push(el('p', { class: 'ok' }, 'Follow-up queued (#' + b.FollowUpID + ') — the next step continues in turn.'));
-        }
+        if (b.Applied) parts.push(el('p', { class: 'ok' }, 'Applied. Consize will verify this change automatically before the next step.'));
         if (!parts.length) parts.push(el('p', { class: 'muted' }, 'Done — no details returned.'));
       }
       return el('div', {}, parts);
@@ -705,18 +732,48 @@
 
     function applyError(e) {
       if (e.status === 422) {
-        // {"error":"apply blocked","reasons":[...]} — reasons verbatim.
         return blockedBox('Apply blocked', e.body && e.body.reasons);
       }
-      return el('p', { class: 'err' }, (e.body && e.body.error) || String(e.message || e));
+      return el('p', { class: 'err' }, formatErrorMessage((e.body && e.body.error) || String(e.message || e)));
     }
 
     function blockedBox(title, reasons) {
-      var lis = (reasons || []).map(function (r) { return el('li', {}, r); });
+      var normalized = (reasons || []).map(function (r) { return formatGuardrailReason(String(r)); });
+      var boxTitle = normalized.length === 1 && normalized[0].title ? normalized[0].title : title;
+      var rows = normalized.map(function (r) { return el('p', {}, r.message); });
       var box = el('div', { class: 'blocked' },
-        el('p', { class: 'blocked-title' }, title),
-        lis.length ? el('ul', { class: 'reasons' }, lis) : el('p', { class: 'muted' }, 'No reasons given.'));
+        el('p', { class: 'blocked-title' }, boxTitle),
+        rows.length ? el('div', { class: 'reasons' }, rows) : el('p', { class: 'muted' }, 'No reasons given.'));
       return box;
+    }
+
+    function formatGuardrailReason(raw) {
+      var m = raw.match(/^recommendation status is "([^"]+)", not pending$/i);
+      if (m) {
+        if (m[1] === 'applied') {
+          return {
+            title: 'Already applied',
+            message: 'This recommendation has already been applied. Refresh the list or review the workload history for its verification status.'
+          };
+        }
+        if (m[1] === 'superseded') {
+          return {
+            title: 'Recommendation no longer current',
+            message: 'A newer recommendation replaced this one. Refresh the list and apply the current recommendation instead.'
+          };
+        }
+        return {
+          title: 'Recommendation unavailable',
+          message: 'This recommendation is ' + m[1] + '. Only pending recommendations can be applied.'
+        };
+      }
+      return { message: formatErrorMessage(raw) };
+    }
+
+    function formatErrorMessage(raw) {
+      var text = String(raw || '').trim();
+      if (!text) return 'Something went wrong.';
+      return text.charAt(0).toUpperCase() + text.slice(1) + (/[.!?]$/.test(text) ? '' : '.');
     }
 
     overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
