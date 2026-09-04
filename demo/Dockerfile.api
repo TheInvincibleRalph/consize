@@ -1,0 +1,20 @@
+# Demo Dockerfiles for the Consize interactive sandbox.
+# Each service in docker-compose.demo.yaml points to one of these.
+# They all use the same multi-stage engine Dockerfile but target different BIN values.
+
+# ── API ──────────────────────────────────────────────────────────────────────
+# demo/Dockerfile.api
+ARG BIN=api
+FROM golang:1.26-alpine AS build
+ARG BIN
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/consize ./cmd/${BIN}
+
+FROM alpine:3.20
+COPY --from=build /out/consize /consize
+USER nobody:nobody
+ENTRYPOINT ["/consize"]
+

@@ -1,0 +1,156 @@
+# Consize Interactive Demo
+#
+# One command. No cluster. No cloud account. No secrets.
+# You get the full safety engine: analyze → apply → verify → auto-rollback.
+#
+# Usage:
+#   docker compose -f docker-compose.demo.yaml up --build
+#
+# Then open http://localhost:3000
+#
+# How the demo works:
+#   1. The dashboard loads with 10 realistic microservice workloads and
+#      pre-computed recommendations (from the shipped fixture data).
+#   2. You click "Apply" on any recommendation in the UI.
+#   3. The apply engine records the change, enforces the 30% step limit,
+#      and creates an audit event — all real code paths.
+#   4. The injector detects the apply and waits 15 seconds, then injects
+#      a simulated OOMKill spike into the Prometheus stub.
+#   5. The verifier fires every 10 seconds. It queries the stub, detects
+#      OOMKills above the threshold, records a FAIL verdict, and
+#      automatically issues a rollback — reverting to the exact pre-apply
+#      values.
+#   6. You see the full story in the Apply Audit timeline in the UI.
+#
+# To watch the rollback happen in real-time:
+#   docker compose -f docker-compose.demo.yaml logs -f verifier injector
+
+services:
+
+  # ── Postgres ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: consize
+      POSTGRES_USER: consize
+      POSTGRES_PASSWORD: consize
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U consize" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # ── Prometheus stub ───────────────────────────────────────────────────────
+  # Implements the Prometheus query_range API. Returns clean SLI data
+  # normally; the injector flips it to return OOMKill events after an apply.
+  prometheus-stub:
+    build:
+      context: ./engine
+      dockerfile: ../demo/Dockerfile.prometheus-stub
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:9090/healthz || exit 1" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Migrate + Seed ────────────────────────────────────────────────────────
+  # Runs DB migrations then seeds the store with fixture workloads and
+  # recommendations so the dashboard is populated on first load.
+  seed:
+    build:
+      context: ./engine
+      dockerfile: ../demo/Dockerfile.seed
+    environment:
+      DATABASE_URL: postgres://consize:consize@postgres:5432/consize?sslmode=disable
+      CONSIZE_MIN_DATA_DAYS: "0.1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ── API ───────────────────────────────────────────────────────────────────
+  # The Consize backend in demo mode:
+  #   - CONSIZE_AUTH_REQUIRED=false  → no login needed
+  #   - CONSIZE_DEMO_PATCHER=true    → Apply works without a real cluster
+  api:
+    build:
+      context: ./engine
+      dockerfile: ../demo/Dockerfile.api
+    environment:
+      DATABASE_URL: postgres://consize:consize@postgres:5432/consize?sslmode=disable
+      CONSIZE_LISTEN_PORT: "8080"
+      CONSIZE_AUTH_REQUIRED: "false"
+      CONSIZE_DEMO_PATCHER: "true"
+      CONSIZE_PRICING: "static"
+      CONSIZE_VERIFY_WINDOW: "10s"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:8080/readyz || exit 1" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # ── UI ────────────────────────────────────────────────────────────────────
+  ui:
+    build:
+      context: ./ui
+      dockerfile: ../demo/Dockerfile.ui
+    environment:
+      API_UPSTREAM: http://api:8080
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ── Verifier ──────────────────────────────────────────────────────────────
+  # Runs the real Consize verifier on a short loop (every 10s in demo mode).
+  # It queries the prometheus-stub for SLIs and rolls back on FAIL.
+  verifier:
+    build:
+      context: ./engine
+      dockerfile: ../demo/Dockerfile.verifier
+    entrypoint: [ "sh", "-c", "while true; do /consize; sleep 10; done" ]
+    environment:
+      DATABASE_URL: postgres://consize:consize@postgres:5432/consize?sslmode=disable
+      PROMETHEUS_URL: http://prometheus-stub:9090
+      CONSIZE_VERIFY_WINDOW: "10s"
+      CONSIZE_SUSTAINED_MINUTES: "1"
+      CONSIZE_DEMO_PATCHER: "true"
+    depends_on:
+      api:
+        condition: service_healthy
+      prometheus-stub:
+        condition: service_healthy
+
+  # ── Injector ─────────────────────────────────────────────────────────────
+  # Watches for apply events, then signals the prometheus-stub to return
+  # failing SLI data so the verifier triggers a rollback.
+  injector:
+    build:
+      context: ./engine
+      dockerfile: ../demo/Dockerfile.injector
+    environment:
+      CONSIZE_API_URL: http://api:8080
+      CONSIZE_STUB_URL: http://prometheus-stub:9090
+      CONSIZE_DEMO_POLL_INTERVAL: "5"
+      CONSIZE_DEMO_INJECT_DELAY: "15"
+    depends_on:
+      api:
+        condition: service_healthy
+      prometheus-stub:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+

@@ -1,0 +1,72 @@
+# ── 1. Build Go Binaries ───────────────────────────────────────────────────
+FROM golang:1.26-alpine AS go-builder
+WORKDIR /src
+COPY engine/go.mod engine/go.sum ./
+RUN go mod download
+COPY engine/ .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/verify ./cmd/verify \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/prometheus-stub ./cmd/prometheus-stub \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/injector ./cmd/injector \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/devseed ./cmd/devseed
+
+# ── 2. Build Next.js UI ────────────────────────────────────────────────────
+FROM node:24-alpine AS ui-builder
+WORKDIR /app
+ARG API_UPSTREAM=http://127.0.0.1:8080
+ENV API_UPSTREAM=${API_UPSTREAM}
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci
+COPY ui/ .
+RUN npm run build
+
+# ── 3. Final Sandbox Image ─────────────────────────────────────────────────
+FROM alpine:3.20
+
+# Install Postgres, Node, Bash, and su-exec
+RUN apk add --no-cache postgresql postgresql-contrib nodejs bash su-exec
+
+# Postgres setup
+RUN mkdir /docker-entrypoint-initdb.d \
+ && mkdir -p /var/run/postgresql \
+ && chown -R postgres:postgres /var/run/postgresql \
+ && chmod 2777 /var/run/postgresql
+
+# Copy Go binaries
+COPY --from=go-builder /out/* /usr/local/bin/
+
+# Copy UI
+WORKDIR /app
+COPY --from=ui-builder /app/public ./public
+COPY --from=ui-builder /app/.next/standalone ./
+COPY --from=ui-builder /app/.next/static ./.next/static
+
+# Start script
+COPY demo/start-sandbox.sh /start.sh
+RUN chmod +x /start.sh
+
+# Environment variables for the local sandbox
+ENV DATABASE_URL=postgres://consize:consize@127.0.0.1:5432/consize?sslmode=disable
+ENV CONSIZE_LISTEN_PORT=8080
+ENV CONSIZE_AUTH_REQUIRED=false
+ENV CONSIZE_DEMO_PATCHER=true
+ENV CONSIZE_PRICING=static
+ENV CONSIZE_VERIFY_WINDOW=10s
+ENV CONSIZE_SUSTAINED_MINUTES=1
+ENV PROMETHEUS_URL=http://127.0.0.1:9090
+ENV CONSIZE_API_URL=http://127.0.0.1:8080
+ENV CONSIZE_STUB_URL=http://127.0.0.1:9090
+ENV CONSIZE_DEMO_POLL_INTERVAL=5
+ENV CONSIZE_DEMO_INJECT_DELAY=15
+ENV CONSIZE_MIN_DATA_DAYS=0.1
+
+# UI variables
+ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
+
+EXPOSE 3000
+
+ENTRYPOINT ["/start.sh"]

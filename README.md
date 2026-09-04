@@ -196,6 +196,7 @@ The M3 milestone unifies **databases into the existing model** (ADR-030): DB ins
 - [Security](docs/security.md) — least privilege, secrets, audit, supply chain
 - [Observability](docs/observability.md) — instrumentation, dashboards, alerting
 - [Demo script](docs/demo.md) — the 10-minute story
+- [Customer guide](docs/customer-guide.md) — product overview, setup, configuration, and operating model
 - [Decisions (ADRs)](docs/decisions.md) — why each choice was made
 - [Reference](docs/reference.md) — all ADRs, the mathematical calculations, and the terminology in one file
 
