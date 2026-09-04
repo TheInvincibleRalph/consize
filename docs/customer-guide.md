@@ -336,7 +336,7 @@ kubectl -n consize-system create secret generic consize-store \
   --from-literal=prometheus-url='http://prometheus-operated.monitoring:9090'
 ```
 
-*Note: Consize provisions a lightweight Postgres database automatically. To use an external Postgres database, set `postgresql.enabled=false` in your values and provide a `database-url` in the secret.*
+> Consize provisions a lightweight Postgres database automatically. To use an external Postgres database, set `postgresql.enabled=false` in your values and provide a `database-url` in the secret.
 
 Optional Slack webhook:
 
@@ -354,7 +354,7 @@ kubectl -n consize-system create secret generic consize-github \
 
 Optional Cloud IAM credentials for Cloud SQL metrics and cloud-waste scanning:
 
-> **Note:** Even though Consize runs inside your cluster, Kubernetes pods only have cluster-level permissions by default. You still need cloud-level IAM permissions to scan out-of-cluster infrastructure like unattached EBS volumes or managed databases.
+> Even though Consize runs inside your cluster, Kubernetes pods only have cluster-level permissions by default. You still need cloud-level IAM permissions to scan out-of-cluster infrastructure like unattached EBS volumes or managed databases.
 
 The most secure and preferred method is to use **Workload Identity (GCP)** or **IRSA (AWS)**. The Consize Helm chart automatically creates the Kubernetes ServiceAccounts for you. You simply annotate them in your `values.yaml` to bind them to your Cloud IAM roles:
 

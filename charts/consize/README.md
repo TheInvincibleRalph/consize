@@ -27,7 +27,7 @@ kubectl -n consize-system create secret generic consize-store \
   --from-literal=prometheus-url='http://prometheus-operated.monitoring:9090'
 ```
 
-*Note: Consize provisions a lightweight Postgres database automatically by default. If you prefer to use an external database, set `postgresql.enabled=false` and include `--from-literal=database-url=...` in the secret above.*
+> Consize provisions a lightweight Postgres database automatically by default. If you prefer to use an external database, set `postgresql.enabled=false` and include `--from-literal=database-url=...` in the secret above.
 
 Optional integration secrets:
 
