@@ -1,9 +1,6 @@
 <div align="center">
 
-<!-- 
-  TODO: Replace with actual banner or logo URL 
-  <img src="docs/assets/banner.png" alt="Consize Logo" width="600"/>
--->
+  <img src="docs/assets/banner.jpg" alt="Consize Logo" width="800"/>
 
 # Consize
 
