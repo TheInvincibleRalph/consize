@@ -34,16 +34,18 @@ Open `http://localhost:3000` in your browser. You can watch the Verifier catch a
 
 Consize is built to run safely inside your cluster. It uses read-only access for analysis and requires explicit, least-privilege, namespace-scoped `RoleBindings` before it can apply any changes.
 
-Install Consize onto a live cluster (AWS and GCP currently supported) using our official Helm chart:
+Install Consize onto a live cluster (AWS and GCP currently supported) using our official Helm chart hosted on GitHub Container Registry (GHCR):
 
 ```bash
-git clone https://github.com/TheInvincibleRalph/consize.git
-cd consize
+# 1. Export the default values to customize your installation
+helm show values oci://ghcr.io/theinvincibleralph/charts/consize > values.yaml
 
-helm install consize ./charts/consize \
+# 2. Install the chart using your customized values
+helm install consize oci://ghcr.io/theinvincibleralph/charts/consize \
+  --version 0.1.0 \
   --namespace consize-system \
   --create-namespace \
-  -f charts/consize/examples/values-prod.yaml
+  -f values.yaml
 ```
 
 ---
