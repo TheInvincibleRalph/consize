@@ -33,10 +33,11 @@ Consize is a tool that *mutates production infrastructure*. Its threat model is 
   deploys, the first-run wizard (`POST /auth/setup`, 8-char minimum) creates
   it interactively: same one-admin-ever gate, no default credential, no open
   registration (ADR-037 §6 amendment).
-- **Consize → k8s (read):** ServiceAccount with read-only RBAC (pods, deployments, statefulsets, namespaces, events). Used by collector + analysis.
-- **Consize → k8s (write):** *separate* ServiceAccount, used only by the apply engine, with RBAC limited to:
-  - `patch deployments/scale` and `patch deployments` on resources **in auto-apply namespaces only** (RoleBinding per namespace, never cluster-wide)
-  - No permission to create/delete workloads, secrets, or RBAC objects
+- **Consize → k8s (read):** `consize-reader` ServiceAccount with read-only RBAC. For cluster-wide installations, leave `CONSIZE_NAMESPACES` empty and bind it to the read-only ClusterRole. It discovers workloads and pods; it cannot mutate anything.
+- **Consize → k8s (write):** *separate* `consize-writer` ServiceAccount, used only by the apply/rollback engine, with RBAC limited to:
+  - `get/list/watch/update deployments` on resources **in explicitly write-enabled namespaces only** (RoleBinding per namespace, never cluster-wide)
+  - `mode=auto` additionally requires `consize.savings.dev/auto-apply=enabled`; approved Direct apply requires an authenticated operator and the RoleBinding
+  - No permission to create/delete workloads, secrets, configmaps, namespaces, nodes, CRDs, or RBAC objects
 - **Consize → cloud DB (read):** IAM policy with only `rds:Describe*`-style reads.
 - **Consize → cloud DB (write):** IAM policy with `rds:ModifyDBInstance` restricted **by resource ARN** (the specific instances registered for management) + `rds:DescribeDBInstances`. No `rds:Delete*`, no `rds:Create*`.
 
@@ -74,7 +75,7 @@ Consize is a tool that *mutates production infrastructure*. Its threat model is 
 
 - [ ] Trivy: 0 HIGH/CRITICAL on final image; base image current
 - [ ] cosign signature verified in CI + deploy gate
-- [ ] RBAC review: write SA can prove "cannot touch anything outside auto-apply namespaces" (assertion test in CI, using `kubectl auth can-i` against a fixture namespace set)
+- [ ] RBAC review: write SA can prove "cannot touch anything outside explicitly write-enabled namespaces" (assertion test in CI, using `kubectl auth can-i` against a fixture namespace set)
 - [ ] Network policies applied to all Consize components
 - [ ] Secrets in Secret Manager; none in git history (pre-commit scan + CI scan)
 - [ ] Audit table grants verified (INSERT-only)

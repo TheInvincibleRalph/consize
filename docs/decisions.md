@@ -175,23 +175,26 @@
 
 ## ADR-018: The verifier is a one-shot CronJob binary, not a service
 
-**Status:** Accepted
+**Status:** Accepted; fixed 24 h window superseded by ADR-048
 
 **Context:** Verification needs a full 24 h post-apply window, then runs for a few seconds per event. A long-lived daemon would idle between verdicts, hold credentials continuously, and need its own liveness story.
 
-**Decision:** `cmd/verify` is a batch binary: `AppliedEventsUnverified()` → for each event whose window is due → compare SLIs → record the verdict → roll back + alert on FAIL → exit. Runs on a CronJob (hourly default), each tick costs nothing when idle. Concurrency is safe by construction: in-flight applies are excluded from new applies by the store's derived state, and `CreateVerificationRun` upserts per apply event so a retried tick overwrites rather than duplicates.
+**Decision:** `cmd/verify` is a batch binary: `AppliedEventsUnverified()` → for each event whose window is due → compare SLIs → record the verdict → roll back + alert on FAIL → exit. Runs on a CronJob every minute, so due applies are processed automatically as soon as their safety window opens. Each tick costs almost nothing when idle. Concurrency is safe by construction: in-flight applies are excluded from new applies by the store's derived state, and `CreateVerificationRun` upserts per apply event so a retried tick overwrites rather than duplicates.
 
-**Consequences:** Verdict latency is bounded by the schedule plus the window (≥ 24 h); acceptable for v1 — the guardrails keep the fleet safe in the meantime. If real-time verification is ever wanted, the same `verifier.Service` slots into a daemon unchanged.
+**Consequences:** Verdict latency is bounded by the schedule plus the window.
+ADR-048 later replaced the fixed 24 h window with a 1 h step-scaled base
+window. If real-time verification is ever wanted, the same `verifier.Service`
+slots into a daemon unchanged.
 
-## ADR-019: Namespace-level kubelet-native SLIs, app-level metrics opt-in
+## ADR-019: Workload-scoped kubelet-native SLIs, app-level metrics opt-in
 
 **Status:** Accepted
 
 **Context:** Per-service SLIs need application instrumentation, which most clusters don't have. The verifier must still tell a good downsize from a regression using signals that exist in any standard cluster.
 
-**Decision:** v1 verifies four kubelet/cadvisor/kube-state-metrics signals scoped to the workload's namespace — throttling (`container_cpu_cfs_throttled_seconds_total`), OOM kills, restarts, evictions — with 1-minute resolution so "sustained ≥ 5 min" is measurable. Attribution works because the concurrency guardrails guarantee at most one in-flight apply per namespace. Error-rate and p99 expressions are configurable via `CONSIZE_SLI_ERROR_EXPR`/`CONSIZE_SLI_P99_EXPR` (rate-wrapped, `sum by (namespace)`), default off.
+**Decision:** v1 verifies four kubelet/cadvisor/kube-state-metrics signals scoped to the Deployment that changed — throttling (`container_cpu_cfs_throttled_seconds_total`), OOM kills, restarts, evictions — with 1-minute resolution so "sustained ≥ 5 min" is measurable. Deployment scoping uses the workload's namespace plus its generated pod-name shape (`<deployment>-<pod-template-hash>-<pod-id>`) so a noisy sibling workload cannot trigger a rollback for a healthy apply. Error-rate and p99 expressions are configurable via `CONSIZE_SLI_ERROR_EXPR`/`CONSIZE_SLI_P99_EXPR` (rate-wrapped, `sum by (namespace)`), default off until teams provide app-level labels.
 
-**Consequences:** Zero-instrumentation verification covers the whole fleet. A quiet namespace with no data at all is *inconclusive*, never a pass (ADR-022). App-level SLIs ride in when teams provide expressions; the evidence schema doesn't change.
+**Consequences:** Zero-instrumentation verification covers the whole fleet without blaming one workload for another workload's restarts or OOMs. A workload with no SLI data at all is *inconclusive*, never a pass (ADR-022). App-level SLIs ride in when teams provide expressions; the evidence schema doesn't change.
 
 ## ADR-020: Step splits materialize as follow-up pending recommendations
 
@@ -243,15 +246,15 @@
 
 **Consequences:** Operators can trade statistical confidence for cycle speed on new fleets; the shipped default is unchanged. The live E2E uses 0.1 ("any data within the window") because no workload has meaningful history on this cluster — the verifier remains the safety gate.
 
-## ADR-025: Per-namespace collection scoping (CONSIZE_NAMESPACES)
+## ADR-025: Collection scoping and read/write RBAC split (CONSIZE_NAMESPACES)
 
 **Status:** Accepted
 
-**Context:** The collector lists deployments, replica sets, and pods — historically cluster-wide. The read identity (consize-reader) is bound per analyzed namespace only; a cluster-scope list fails under that least-privilege Role, and the live-cluster E2E hit exactly that (`cannot list resource "deployments" ... at the cluster scope`). Scoping collection to the namespaces a Role can actually read is the mirror of the write side's per-namespace design (ADR-021).
+**Context:** The collector lists deployments, replica sets, and pods — historically cluster-wide. Early E2E runs proved the namespace-scoped read model by binding `consize-reader` only in analyzed namespaces; a cluster-scope list correctly failed under that Role. The production architecture now needs a broader enterprise mode: discover the whole cluster without broadening the write surface.
 
-**Decision:** `CONSIZE_NAMESPACES` ("ns1,ns2") scopes workload listing to the named namespaces. Empty (the shipped default) keeps cluster-wide behavior — the same binary, no behavior change for operators who run a cluster-scope read Role. Implemented as `NewK8sMetadata(kubeconfig, namespaces)` with `listNS()` returning the configured set or `NamespaceAll`; `ListDeployments` and `PodOwners` loop the resolved set.
+**Decision:** `CONSIZE_NAMESPACES` ("ns1,ns2") scopes workload listing to the named namespaces. Empty keeps cluster-wide discovery and is paired in production with a read-only `consize-reader` ClusterRoleBinding. The write identity remains separate: `consize-writer` is bound only by namespaced `consize-apply` RoleBindings where Direct apply is explicitly allowed. `mode=auto` additionally requires `consize.savings.dev/auto-apply=enabled`. IaC PR mode does not require Kubernetes write RBAC. Implemented as `NewK8sMetadata(kubeconfig, namespaces)` with `listNS()` returning the configured set or `NamespaceAll`; `ListDeployments` and `PodOwners` loop the resolved set.
 
-**Consequences:** The collector can run with per-namespace read Roles, proving least privilege end-to-end on a live cluster. Also surfaced a manifest gap fixed alongside: a RoleBinding's RoleRef resolves in the binding's namespace only — the write Role must exist in every bound namespace (tests/e2e-live/namespace.yaml now ships the per-namespace Role+Binding pair; deploy/rbac.yaml's runbook says so).
+**Consequences:** Operators can choose namespace-scoped collection for a team install or cluster-wide discovery for an enterprise install without granting cluster-wide write. Direct runtime changes stay namespace opt-in; source-of-truth changes go through the GitHub/IaC PR workflow. A RoleBinding's RoleRef resolves in the binding's namespace only, so the write Role must exist in every namespace that explicitly enables Direct apply.
 
 ## ADR-026: Rollback restores pre-apply values absolutely (drift-proof)
 
@@ -654,25 +657,52 @@ month-over-month trend charts remain future reporting polish.
 **Context:** The next feature list calls for Consize to find non-workload
 resources that still accrue cost — unattached storage volumes, idle load
 balancers, unused NAT gateways, and stopped instances — and to avoid
-configuration drift by changing Terraform instead of making direct cloud
-console edits.
+configuration drift by changing source-controlled infrastructure where possible.
 
 **Decision:** Add a broader `costscan.Source` seam and persist findings as
 cost opportunities. The live GKE deployment uses a GCP source backed by the
 Compute Engine API and the existing `consize-gcp` service-account key. The
-fixture source remains only for tests and local demos. The first live GCP
+fixture source remains only for tests and explicit local demos. The first live GCP
 implementation emits high-signal findings for detached Persistent Disks and
 stopped VMs whose Persistent Disks still accrue cost; idle load balancer and
 unused Cloud NAT findings require traffic evidence and remain the next
 monitoring-backed scan extensions. Each opportunity records provider, account,
 region, resource identity, estimated monthly cost, evidence, risk, recommended
-action, and optional Terraform metadata. Operators can prepare an audited
-Terraform PR plan/diff from an opportunity, but the MVP does not yet open a
-real GitHub/GitLab pull request.
+action, and optional Terraform metadata. Operators can prepare an audited IaC
+PR, and the GitHub integration can create the branch/commit/draft PR when
+credentials are configured. Direct cleanup is deliberately narrower: v1 supports
+only GCP unattached Persistent Disks, and revalidates the disk is still detached
+immediately before requesting deletion.
 
 **Consequences:** The UI now has a Cloud waste section where admins/operators
-can run the scan, review evidence, and generate the Terraform change plan.
-This keeps the safe Consize pattern intact: observe → recommend → reviewable
-change plan. Direct cloud deletion stays out of the MVP, and real VCS
-submission requires a provider adapter, installation-scoped credentials, and
-repository ownership mapping.
+can run the scan, review evidence, open an IaC PR, or use Direct cleanup for
+supported low-ambiguity resources. Direct cleanup records an insert-only
+`cost_actions` trail before and after the provider call, so cleanup does not
+vanish when an opportunity is marked resolved. This keeps the safe Consize
+pattern intact: observe → recommend → reviewable source change by default;
+direct provider mutation only where the provider can be re-checked at execution
+time.
+
+## ADR-048: Verification windows scale by apply step
+
+**Status:** Accepted (2026-08-31)
+
+**Context:** The original 24 h verification window was safe but too slow for
+the normal rightsizing loop. A first step in Consize is deliberately modest,
+because the apply engine already limits Kubernetes changes to 30% per step and
+database changes to one adjacent class. Waiting a full day after every small
+step makes the product feel stuck, while using a flat short window for every
+step would under-observe deeper reductions.
+
+**Decision:** Replace the fixed 24 h shipped default with a 1 h base window
+that scales by apply step number. Step 1 uses 1 h, step 2 uses 2 h, step 3 uses
+3 h, and so on. The verifier uses the effective step window for both the
+pre-apply baseline and the post-apply observation period, so comparisons remain
+balanced. The dashboard status endpoint computes the same due time from the
+insert-only apply event's stored `step_number`.
+
+**Consequences:** First-step feedback is much faster, follow-up steps still get
+progressively more evidence, and no namespace/workload labeling policy is
+needed for the MVP. `CONSIZE_VERIFY_WINDOW` remains configurable, but it now
+means the base window, not a flat window for every apply. Installations that
+need a more conservative posture can raise the base duration.

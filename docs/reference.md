@@ -117,13 +117,23 @@ A CPU request cut without a matching limit cut does nothing; unedited memory lim
 
 **Status:** Accepted
 
-Verification needs a full 24 h post-apply window, then runs seconds per event. **Decision:** `cmd/verify` is a batch binary: `AppliedEventsUnverified()` → for each event whose window is due → compare SLIs → record verdict → roll back + alert on FAIL → exit. Hourly CronJob; `CreateVerificationRun` upserts per apply event, so a retried tick overwrites rather than duplicates. **Consequences:** verdict latency bounded by schedule + window (≥ 24 h); the same `verifier.Service` slots into a daemon unchanged if real-time verification is ever wanted.
+Verification needs enough post-apply telemetry to prove the change did not
+hurt the workload, but a full 24 h wait after every small step makes the
+product feel stuck. **Decision:** `cmd/verify` is a batch binary:
+`AppliedEventsUnverified()` → for each event whose step-scaled window is due →
+compare SLIs → record verdict → roll back + alert on FAIL → exit. The shipped
+base window is 1 h and scales by step number: step 1 waits 1 h, step 2 waits
+2 h, step 3 waits 3 h, and so on. `CreateVerificationRun` upserts per apply
+event, so a retried tick overwrites rather than duplicates. **Consequences:**
+first-step feedback is fast, deeper reductions get more observation time, and
+the same `verifier.Service` slots into a daemon unchanged if real-time
+verification is ever wanted.
 
-## ADR-019: Namespace-level kubelet-native SLIs, app-level metrics opt-in
+## ADR-019: Workload-scoped kubelet-native SLIs, app-level metrics opt-in
 
 **Status:** Accepted
 
-Most clusters lack app instrumentation; the verifier must still work. **Decision:** v1 verifies four kubelet/cadvisor/kube-state-metrics signals scoped to the workload's namespace — throttling (`container_cpu_cfs_throttled_seconds_total`), OOM kills, restarts, evictions — at 1-minute resolution so "sustained ≥ 5 min" is measurable. Attribution works because concurrency guardrails guarantee at most one in-flight apply per namespace. Error-rate/p99 expressions opt-in via `CONSIZE_SLI_ERROR_EXPR`/`CONSIZE_SLI_P99_EXPR` (rate-wrapped, `sum by (namespace)`), default off. **Consequences:** zero-instrumentation verification covers the whole fleet; a quiet namespace with no data is *inconclusive*, never a pass (ADR-022). *(Math: Part B §6.)*
+Most clusters lack app instrumentation; the verifier must still work. **Decision:** v1 verifies four kubelet/cadvisor/kube-state-metrics signals scoped to the Deployment that changed — throttling (`container_cpu_cfs_throttled_seconds_total`), OOM kills, restarts, evictions — at 1-minute resolution so "sustained ≥ 5 min" is measurable. Deployment scoping uses namespace plus the generated pod-name shape (`<deployment>-<pod-template-hash>-<pod-id>`), so a noisy sibling workload cannot roll back a healthy apply. Error-rate/p99 expressions opt in via `CONSIZE_SLI_ERROR_EXPR`/`CONSIZE_SLI_P99_EXPR` (rate-wrapped, `sum by (namespace)`), default off until teams provide app-level labels. **Consequences:** zero-instrumentation verification covers the whole fleet; a workload with no data is *inconclusive*, never a pass (ADR-022). *(Math: Part B §6.)*
 
 ## ADR-020: Step splits materialize as follow-up pending recommendations
 
@@ -159,7 +169,7 @@ The 5-day minimum is a statistical-confidence rule, not a safety rule — the ve
 
 **Status:** Accepted
 
-The read identity is bound per analyzed namespace; a cluster-scope list fails under that Role — the live E2E hit exactly that. **Decision:** `CONSIZE_NAMESPACES` ("ns1,ns2") scopes workload listing; empty (shipped default) keeps cluster-wide behavior. `NewK8sMetadata(kubeconfig, namespaces)` with `listNS()` returning the configured set or `NamespaceAll`. **Consequences:** the collector can run with per-namespace read Roles, proving least privilege end-to-end; also surfaced that a RoleBinding's RoleRef resolves in the binding's namespace only — the write Role must exist in every bound namespace.
+`CONSIZE_NAMESPACES` ("ns1,ns2") scopes workload listing to named namespaces. Empty keeps cluster-wide discovery. The production posture pairs that empty value with a read-only `consize-reader` ClusterRoleBinding, while direct writes remain separately scoped through per-namespace `consize-writer` RoleBindings. `NewK8sMetadata(kubeconfig, namespaces)` implements this with `listNS()` returning the configured set or `NamespaceAll`. **Consequences:** operators can choose team-scoped collection or cluster-wide discovery without ever granting cluster-wide write. A RoleBinding's RoleRef resolves in the binding's namespace only, so the write Role must exist in every namespace that explicitly opts into Direct apply.
 
 ## ADR-026: Rollback restores pre-apply values absolutely (drift-proof)
 
@@ -421,7 +431,9 @@ E.g. total $18.00, stepReq 700, final 100, current 1000: after step 1, follow-up
 
 ## §6 Verification math — k8s path — `verifyK8s`/`longestRun`
 
-Baseline window (24 h pre-apply) vs post window (24 h post-apply) at 1-minute samples. Each signal has a multiplier; threshold = **baseline × mult**:
+Baseline window vs post window uses the effective step-scaled duration at
+1-minute samples. Each signal has a multiplier; threshold =
+**baseline × mult**:
 
 | signal | kind | mult |
 |---|---|---|
@@ -577,7 +589,7 @@ PruneRecommendations(status, cutoff): only superseded rows, only by age,
 | **dry-run** | Apply mode that records a `planned` event and touches nothing; exempt from the maintenance-window *timing* guard but still reports `InWindow`/`Window` and fails closed on unconfigured/malformed windows; never queues follow-ups (ADR-031 §1,§3). |
 | **verifier / SLI / verdict** | The `cmd/verify` batch binary compares baseline vs post signals (SLIs) and records a three-valued verdict: **passed** | **failed** (→ auto-rollback + alert) | **inconclusive** (terminal, never rolls back; blocks further applies until a human looks) (ADR-006/018/022/027, §6–§7). |
 | **rollback** | On FAIL: k8s — restore **pre-apply values absolutely** via a live `live → pre-apply` diff (drift-proof, ADR-026); DB — restore the absolute pre-apply class recorded in the apply event (ADR-032 §6). Recorded as a `reverted` apply event. |
-| **RBAC / least privilege** | The collector runs a read-only Role bound per analyzed namespace (`CONSIZE_NAMESPACES`, ADR-025); the writer Role is bound only in namespaces Consize may touch (auto-apply label or explicit approval); proven by a `kubectl auth can-i` matrix in the live E2E. |
+| **RBAC / least privilege** | The collector uses `consize-reader`: read-only ClusterRoleBinding for cluster-wide discovery when `CONSIZE_NAMESPACES` is empty, or namespace-scoped reads when set. Direct apply/rollback use the separate `consize-writer` identity, bound only in explicitly write-enabled namespaces; `mode=auto` additionally requires the auto-apply label. IaC PR mode needs GitHub access, not Kubernetes write RBAC. |
 | **CDP smoke** | Headless-Chrome (Chrome DevTools Protocol on `127.0.0.1:9222`) end-to-end UI check: load pages, poll rendered text for hit markers, count `window.__rejected` promise rejections. Used to verify the Next.js UI (and before it, the embedded SPA) against the poke. |
 | **API_UPSTREAM / rewrite** | `next.config.ts` rewrites `/api/v1/:path*` → `API_UPSTREAM` (default `http://127.0.0.1:18099`): the same Next.js build works against poke, cluster, or cloud API; `NEXT_PUBLIC_API_BASE` is the escape hatch; no CORS (ADR-036 §2). |
 | **auto-apply label** | `consize.savings.dev/auto-apply=enabled` (namespace) / `consize.savings.dev/auto-db=enabled` (DB instance) — the only way automatic application is allowed; everything else needs an explicit approved actor (ADR-004, ADR-031 §3). |

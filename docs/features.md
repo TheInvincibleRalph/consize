@@ -148,9 +148,10 @@ time; each remainder materializes as a follow-up pending recommendation that
 cannot apply until the previous step verifies — the apply → verify → apply
 rhythm by construction (ADR-020).
 
-Verification (`internal/verifier`) is a one-shot CronJob binary (hourly,
-ADR-018): it compares a 24 h pre-apply baseline against the post window on
-namespace-scoped kubelet-native signals — throttling, OOM kills, restarts,
+Verification (`internal/verifier`) is a one-shot CronJob binary (every minute,
+ADR-018/ADR-048): it compares a step-scaled pre-apply baseline against the
+matching post window on
+workload-scoped kubelet-native signals — throttling, OOM kills, restarts,
 evictions — with opt-in app-level error/p99 expressions (ADR-019). Verdicts
 are three-valued: **passed | failed | inconclusive**. Rollback fires only on
 FAIL (ADR-022); inconclusive is terminal, never silent, and never rolls back —
@@ -187,7 +188,7 @@ required" until a live provider lands.
 
 **Where you see it.** `POST /api/v1/recommendations/{id}/apply` (dry_run /
 approved / auto), `GET /api/v1/applies`, `GET /api/v1/verification-runs`, and
-the `consize-verify` CronJob (hourly, off the :00 minute). 503 without a write
+the `consize-verify` CronJob (every minute). 503 without a write
 identity, structured 422 with reasons when guardrails block — never silent.
 
 ## 6. The API
@@ -379,12 +380,15 @@ analyzes and update only what it applies, and it dogfoods its own advice
 (ADR-010).
 
 **How it works.** Two ServiceAccounts in `engine/deploy/rbac.yaml`:
-`consize-writer` — `get/list/watch/update` on **deployments only**, bound
-per-namespace via RoleBindings in auto-apply namespaces only, used by both
-apply and verify (one write surface, ADR-021); `consize-reader` — read-only on
-deployments/replica sets/pods, bound to the analyzed namespaces (ADR-025).
-Apply endpoints answer 503 without a write identity. Namespaces opt in with
-`consize.savings.dev/auto-apply` / `auto-db` labels; exclusions always win.
+`consize-reader` — read-only cluster discovery for deployments/statefulsets/
+daemonsets/replica sets/jobs/cronjobs/pods/namespaces when `CONSIZE_NAMESPACES`
+is empty; `consize-writer` — `get/list/watch/update` on **deployments only**,
+bound per namespace via RoleBindings only where Direct apply is allowed. Apply
+endpoints answer 503 without a write identity. `mode=auto` additionally
+requires the namespace label `consize.savings.dev/auto-apply=enabled`;
+approved Direct apply requires an authenticated operator plus the RoleBinding.
+IaC PR mode does not need Kubernetes write RBAC; it uses the GitHub integration
+to create a reviewable source change. Exclusions always win.
 Full posture in `docs/security.md` (13/13 RBAC matrix proven live in the E2E).
 
 On top of that sits **user authentication and server-side authorization
@@ -474,7 +478,7 @@ the whole loop is exercisable end to end at any time.
 
 Deployed as: `consize-collector` (CronJob 15m), `consize-analyze` (CronJob
 15m), `consize-api` (Deployment, serves API + dashboard), `consize-verify`
-(CronJob hourly) — manifests in `engine/deploy/`, write identity in
+(CronJob every minute) — manifests in `engine/deploy/`, write identity in
 `engine/deploy/rbac.yaml` (ADR-010: Consize runs in the cluster it manages).
 
 ## 12. Teams and on-call ownership
@@ -608,7 +612,7 @@ The first live rollout used images `api:consize-weekly-report-20260828` and
 `report:consize-weekly-report-20260828`; live smoke verified JSON generation,
 PDF generation, Slack send-now, and the disabled CronJob no-op path.
 
-## 15. Cloud-waste opportunities and Terraform PR plans
+## 15. Cloud-waste opportunities and IaC PR workflow
 
 **What it does.** Extends Consize beyond workload rightsizing into common
 cloud-cost leaks: unattached storage volumes, idle load balancers, unused NAT
@@ -618,56 +622,83 @@ monthly savings, and a reviewable next action.
 
 **How it works.** `internal/costscan` defines a provider `Source` seam. The
 live GKE deployment runs `CONSIZE_COSTSCAN=gcp` with the same `consize-gcp`
-service-account key used by the Cloud SQL collector. The GCP source queries
-the Compute Engine API for detached Persistent Disks and stopped VMs whose
-Persistent Disks still accrue cost. The fixture source remains for local demos
-and tests only. Scan results are upserted into `cost_opportunities`, keyed by
+service-account key used by the Cloud SQL collector. Manual scans from the API
+use that same environment-selected source; unset/`none` means disabled, never
+implicit fixtures. The GCP source queries the Compute Engine API for detached
+Persistent Disks and stopped VMs whose Persistent Disks still accrue cost. The
+fixture source remains for explicit local demos and tests only. Scan results
+are upserted into `cost_opportunities`, keyed by
 provider/account/region/type/id, so repeated scans refresh evidence without
-duplicating rows. Consize does not delete these resources directly. Instead,
-an operator can prepare an audited Terraform PR plan/diff from an opportunity,
-keeping cloud changes reviewable and avoiding configuration drift.
+duplicating rows. Operators can either prepare an audited IaC PR plan/diff from
+an opportunity, keeping cloud changes reviewable and avoiding configuration
+drift, or use Direct cleanup where the provider deleter has a safety re-check.
+The first Direct cleanup implementation supports GCP unattached Persistent
+Disks only: Consize re-reads the disk, refuses if it is attached or no longer
+READY, then requests deletion and marks the opportunity resolved. Direct
+cleanup writes an insert-only `cost_actions` trail (`requested → applied`,
+`dry_run`, or `failed`) so resolved cloud-waste items remain visible after they
+leave the active opportunities list. Stopped VM, load balancer, and NAT cleanup
+remain PR-first until provider-specific safety checks are implemented.
 
-The Terraform PR workflow is intentionally **not exclusive to cloud waste**.
-Normal rightsizing recommendations also support a PR-plan delivery path:
+The IaC PR workflow is intentionally **not exclusive to cloud waste**.
+Normal rightsizing recommendations also support a PR delivery path:
 operators can either run a direct Consize apply for non-IaC workloads and
-convenience flows, or generate a Terraform PR plan for teams whose repository
-is the source of truth. The MVP stores a planned branch/title/body/diff without
-requiring GitHub credentials. GitHub configuration is installation-wide, not
-recommendation-specific: admins configure a GitHub organization/account,
-token environment reference, and the repositories Consize may read/write.
-A monorepo is represented as one authorized repository with a root path;
-enterprise teams can add multiple repositories. Specific Terraform file and
-resource selection happens in the PR workflow today and should later be inferred
-from annotations, repo scan, Terraform state, or ownership metadata — not from
-the GitHub connection page. When GitHub credentials are present, Consize can
-create a branch, commit the Terraform file change, and open a draft PR.
-The Terraform target path must point at a concrete file (`.tf` or `.tf.json`),
-not a directory. For monorepos, configure the repository root path as the folder
-such as `infra/terraform`, then use a file path such as `workloads.tf` or
-`infra/terraform/workloads.tf` in the PR workflow.
+convenience flows, or open a PR for teams whose repository is the source of
+truth. The MVP stores a planned branch/title/body/diff without requiring GitHub
+credentials. GitHub configuration is installation-wide, not recommendation-
+specific: admins configure a GitHub organization/account, token environment
+reference, and the repositories Consize may read/write. A monorepo is
+represented as one authorized repository with a root path; enterprise teams can
+add multiple repositories. Specific source file and resource selection happens
+in the PR workflow today and should later be inferred from annotations, repo
+scan, Terraform state, ArgoCD Application metadata, Helm release metadata, or
+ownership metadata — not from the GitHub connection page.
+
+When GitHub credentials are present, Consize can create a branch, commit the
+source change, and open a draft GitHub PR. Supported recommendation PR writers:
+
+- Terraform files (`.tf`, `.tf.json`) patch the selected Terraform resource
+  address.
+- Kubernetes YAML files (`.yaml`, `.yml`) patch the matching workload manifest
+  by kind/name/namespace.
+- Kustomize/GitOps apps should target repo-owned patch files or overlays first.
+  If no overlay exists yet, they can target a vendored base manifest that is
+  committed to the team's repo. For example, a Google Online Boutique install
+  can vendor the upstream release, keep common overrides in
+  `kubernetes/boutique/overlays/dev/`, and still let Consize open PRs against
+  `kubernetes/boutique/base/kubernetes-manifests.yaml` for workloads that do
+  not have an overlay patch yet.
+- Helm values are recognized as an IaC source type, but opening a Helm-values
+  PR requires an explicit values key mapping before Consize can safely edit it;
+  charts differ too much to infer this blindly.
+
+The source path must point at a concrete file, not a directory. For monorepos,
+configure the repository root path as the folder such as `infra/terraform` or
+`clusters/prod`, then use a file path such as `workloads.tf`,
+`apps/api/deployment.yaml`, or `values.yaml` in the PR workflow.
 
 **Where the code lives.** `engine/internal/costscan/`, `engine/cmd/costscan/`,
-store migrations `0007_cost_opportunities.sql` and
-`0008_iac_plans_for_recommendations.sql`, API routes in
+store migrations `0007_cost_opportunities.sql`,
+`0008_iac_plans_for_recommendations.sql`, and `0009_cost_actions.sql`, API routes in
 `engine/internal/api/cost.go`, deploy manifest
 `engine/deploy/costscan-cronjob.yaml`, and the Next.js `/cost` console page.
 API surface:
 
 - `GET /api/v1/cost-opportunities`
 - `POST /api/v1/cost-opportunities/scan`
+- `POST /api/v1/cost-opportunities/{id}/apply`
 - `POST /api/v1/cost-opportunities/{id}/iac-pr`
 - `POST /api/v1/recommendations/{id}/iac-pr`
 - `GET /api/v1/integrations/github`
 - `PUT /api/v1/integrations/github`
 
-Current MVP scope: persisted findings, manual scan, daily GCP CronJob, and
-Terraform PR generation for cloud waste and rightsizing recommendations. When
-the configured GitHub token is available, Consize creates a branch, updates the
-mapped Terraform file, and opens a draft GitHub PR if the selected file is a
-Terraform file and contains the expected Terraform resource block/values. The
-GitHub integration stores metadata only; tokens stay outside Postgres as
-Kubernetes Secret-backed
-environment variables such as `CONSIZE_GITHUB_TOKEN`. Future hardening:
-traffic-backed idle load balancer and Cloud NAT detection, repository ownership
-discovery, broader Terraform patching, GitLab PR creation, and snooze/exempt
-policy before any automated cleanup.
+Current MVP scope: persisted findings, manual scan, daily GCP CronJob, and IaC
+PR generation for cloud waste and rightsizing recommendations. When the
+configured GitHub token is available, Consize creates a branch, updates the
+mapped source file, and opens a draft GitHub PR if the selected file can be
+patched safely. The GitHub integration stores metadata only; tokens stay outside
+Postgres as Kubernetes Secret-backed environment variables such as
+`CONSIZE_GITHUB_TOKEN`. Future hardening: traffic-backed idle load balancer and
+Cloud NAT detection, repository ownership discovery, ArgoCD/Helm/Kustomize
+resolvers, GitLab PR creation, and snooze/exempt policy before any automated
+cleanup.

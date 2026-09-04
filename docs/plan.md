@@ -53,7 +53,7 @@ The safety engine — the part that makes Consize a *platform*, not a report.
 **Tasks**
 - [x] Apply engine: dry-run patch diff, guardrail evaluation (exclusions, step ≤ 30%, auto-apply labels, concurrency)
 - [x] k8s write ServiceAccount manifest (`deploy/rbac.yaml`, least-privilege per security.md), resourceVersion-guarded GET→mutate→UPDATE patches with 3× conflict retry
-- [x] Verifier: baseline window capture (24 h), SLI comparison (throttling, OOMKill, restarts, evictions; app-level error/p99 exprs opt-in)
+- [x] Verifier: step-scaled baseline/post windows, SLI comparison (throttling, OOMKill, restarts, evictions; app-level error/p99 exprs opt-in)
 - [x] Auto-rollback on FAIL + alert (`internal/alert`: structured logs always, Slack webhook when `CONSIZE_SLACK_WEBHOOK` set)
 - [x] `apply_events` + `verification_runs` audit trail (migration 0002, INSERT-only events, derived in-flight state)
 - [x] `POST /api/v1/recommendations/{id}/apply` (modes: dry_run | approved | auto) + `GET /applies`, `GET /verification-runs`

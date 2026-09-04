@@ -40,7 +40,7 @@ consize-system
 Identities (deploy/rbac.yaml + tests/e2e-live/namespace.yaml):
 
 - `consize-writer` — `update deployments` ONLY, bound to consize-sandbox + boutique (write). Used by api (apply) and verify (rollback) — one write surface.
-- `consize-reader` — read-only on deployments/statefulsets/replicasets/pods, bound to the same two namespaces (collector).
+- `consize-reader` — read-only on deployments/statefulsets/replicasets/pods. Older E2E runs bound this per namespace; production can instead leave `CONSIZE_NAMESPACES` empty and use the read-only ClusterRoleBinding for cluster-wide discovery.
 
 ## Running it
 
@@ -67,7 +67,10 @@ De-risking choices:
 - **The canary is only applied against after it has real data** (~1.5 h of Prometheus history), so Track 2's recommendation is genuine, not seeded.
 - **Images are rebuilt and pushed each deploy**; the deploy script is idempotent (repo/secret/manifests are all re-appliable).
 - **API access is a local port-forward** (ClusterIP only — nothing exposed to the internet).
-- **Shortened windows**: the deployed verify CronJob uses `CONSIZE_VERIFY_WINDOW=15m`, `CONSIZE_SUSTAINED_MINUTES=3` for a session-length run; the shipped defaults are 24 h / 5 m (ADR-018/019).
+- **Verification cadence**: the shipped verifier runs every minute and processes
+  any apply whose safety window is due. The base window is 1 h and scales by
+  apply step number, plus `CONSIZE_SUSTAINED_MINUTES=5` (ADR-048/019). Earlier
+  live E2E sessions shortened the base window for session-length testing.
 - **Database surface (M3, ADR-033)**: the collector CronJob sets `CONSIZE_DBMETRICS=fixture`, so the deployed stack also ingests the deterministic demo instance `rds/payments-prod` (`db.t3.large` → `db.t3.medium`, $50/mo, confidence 100%, verified locally end-to-end against Postgres on 2026-08-25). Apply it the same way as any recommendation — `mode=approved` with an actor inside its maintenance window (`sun:00:00-sat:00:00` UTC, i.e. any moment except Saturday UTC); a real apply returns the stub's "manual class change required" error until a live provider lands, and dry-runs work end to end. Its `auto-db=enabled` label demonstrates the approval-default guardrail's auto path.
 
 ## Teardown

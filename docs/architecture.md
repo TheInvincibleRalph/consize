@@ -47,7 +47,7 @@ Pulls and normalizes raw telemetry into the store.
 | Cloud DB metrics | CPUUtilization, FreeableMemory, Read/WriteIOPS, DatabaseConnections, replicas, instance class | Provider SDK |
 | Pricing catalogs | On-demand hourly price per request unit / instance class | AWS Price List API, GCP Cloud Billing Catalog (cached locally, refreshed daily) |
 
-Collector is idempotent: buckets are upserted by `(resource, metric, window_start)`. A backfill flag replays history. Runs as a k8s CronJob, hourly.
+Collector is idempotent: buckets are upserted by `(resource, metric, window_start)`. A backfill flag replays history. Runs as a k8s CronJob, typically every 15 minutes.
 
 ### 3.2 Analysis Engine
 The core logic, pure functions over stored telemetry — no I/O inside (unit-testable).
@@ -103,7 +103,9 @@ After each apply, compares SLIs over a window against a pre-apply baseline.
 | OOMKilled / evictions | any new events |
 | DB: CPU saturation > 85% | sustained 15 min |
 
-- Baseline: 24 h before apply. Verification: 24 h after apply (configurable).
+- Baseline and post-change verification use a step-scaled window. The default
+  base is 1 h: step 1 compares 1 h before/after apply, step 2 compares 2 h,
+  step 3 compares 3 h, and so on.
 - Verdict `PASS` → recommendation marked `verified`, realized savings tracked.
 - Verdict `FAIL` → **automatic rollback** (restore previous requests/limits or previous instance class), mark `rolled_back`, attach evidence, alert on-call via configured channel.
 
@@ -154,7 +156,7 @@ Consize runs on the cluster it manages (self-hosted):
 
 ## 6. Interfaces & contracts
 
-- **k8s access:** read-only ServiceAccount for collector/analysis; write ServiceAccount for apply, RBAC-scoped to namespaces with auto-apply (see `docs/security.md`).
+- **k8s access:** read-only ServiceAccount for collector discovery; cluster-wide when `CONSIZE_NAMESPACES` is empty, namespace-scoped when set. The write ServiceAccount is separate and RBAC-scoped only to namespaces that explicitly bind `consize-writer`; `mode=auto` also requires the namespace auto-apply label (see `docs/security.md`).
 - **Cloud DB access:** read-only for metrics; `rds:ModifyDBInstance`-style write permission for apply, restricted by resource ARN.
 - **Pricing cache:** daily refresh; stale data never silently used — cache age is part of confidence scoring.
 - **Verification signals:** consumed from Prometheus via recording rules shipped with the Helm chart.
