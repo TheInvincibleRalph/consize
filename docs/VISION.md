@@ -7,11 +7,11 @@
 
 ## The Problem
 
-Cloud infrastructure teams waste 30–50% of their compute and database spend not because they lack visibility — but because they lack *confidence*.
+Cloud infrastructure teams waste 30–50% of their compute and database spend not because they lack visibility — but because the operational risk outweighs the potential savings.
 
 They can see the Grafana dashboards showing a workload using 12% of its requested CPU. They can see that RDS instance with average utilization under 20%. But making the change is terrifying. What if it OOMKills in the middle of the night? What if the database becomes the bottleneck during a traffic spike after a resize? What if the change causes a production incident and there is no automated way to revert?
 
-So the spreadsheet lives on, the Jira ticket ages, and the cloud bill grows.
+As a result, these optimizations are often postponed, leaving the cloud bill to grow unnecessarily.
 
 **Consize exists to close that gap.** Not just another cost visibility dashboard — a fully automated safety engine that analyzes, applies, verifies, and rolls back infrastructure changes with complete auditability.
 
@@ -23,9 +23,9 @@ So the spreadsheet lives on, the Jira ticket ages, and the cloud bill grows.
 
 We believe that:
 
-- **Math, not magic:** Every recommendation must be explainable and reproducible. Infrastructure changes are too consequential for black-box AI guesswork. Consize uses deterministic statistical models (p95/p99 over 14-day windows) that any engineer can audit and understand.
-- **Safety is the product:** Identifying savings is the easy part. The hard part is applying those changes without breaking production. The verifier, auto-rollback, and SLI safety gates are not features — they *are* Consize.
-- **GitOps native:** Optimization should never cause configuration drift. The source of truth for infrastructure should remain your Git repository. Consize integrates with your IaC workflows rather than fighting them.
+- **Data-driven verification:** Every recommendation must be explainable and reproducible. Infrastructure changes are too consequential for black-box AI guesswork. Consize uses deterministic statistical models (p95/p99 over 14-day windows) that any engineer can audit and understand.
+- **Safety is the product:** Identifying savings is the easy part. The hard part is applying those changes without breaking production. The verifier, auto-rollback, and SLI safety gates are not mere features — they *are* Consize's core engine' safety net and for the Engineer, a confidence booster.
+- **GitOps native:** Optimization should never cause configuration drift. The source of truth for infrastructure should remain your Git repository. Consize integrates with your IaC workflows to adapt with your GitOps patttern.
 - **Least privilege by design:** Consize requests only the permissions it needs, scoped to exactly the namespaces you allow. It never applies changes silently. Every action is logged, attributed, and reversible.
 - **Open and self-hosted first:** We believe in the [Grafana model](https://grafana.com/blog/2019/10/03/how-open-source-grew-to-become-the-leader-in-monitoring/). The core engine is, and always will be, open source and self-hostable. Organizations should be able to run Consize completely inside their own network without sending workload data to any third party.
 
@@ -42,14 +42,12 @@ ANALYZE ──► RECOMMEND ──► APPLY (step-wise) ──► VERIFY ──�
 
 1. **Analyze:** The Collector ingests Prometheus metrics (CPU/memory usage, database SLIs) on a configurable cadence and computes 14-day p50/p95/p99/max percentile windows.
 2. **Recommend:** The Analysis engine generates statistically-grounded recommendations. CPU requests are set to `p95 × 1.2`. Limits are set to `max(2×request, p99)`. Recommendations with less than 5 days of data are withheld. Skip conditions (excluded labels, data-loss-risk workloads, already-optimal workloads) are applied.
-3. **Apply:** Changes are applied in steps, never all at once. A 50% reduction is applied as two separate 25% steps. Each step uses `resourceVersion`-guarded Kubernetes patches, preventing race conditions with other controllers.
+3. **Apply:** Changes are applied in steps, never all at once. A large reduction is divided and applied gradually across multiple smaller, safer steps. Each step uses `resourceVersion`-guarded Kubernetes patches, preventing race conditions with other controllers.
 4. **Verify:** After each apply step, the Verifier monitors SLIs (CPU throttling, OOMKill count, restart rate, application-level error rate, p99 latency) for a configurable window that scales with the step number. If any SLI exceeds its threshold, the system immediately reverts to the byte-identical pre-apply values.
 
 ---
 
 ## Try the Interactive Sandbox
-
-*"Show, don't tell."*
 
 We packaged the entire Consize backend (API, Verifier, Prometheus Stub, Postgres) and the Next.js UI into a single, self-contained interactive demo container. 
 
@@ -67,7 +65,7 @@ The sandbox comes pre-seeded with historical data and a simulated workload (`che
 
 ## Current State
 
-Consize is **production-ready** and deployed on live GKE clusters. The core safety engine is fully implemented, tested, and battle-tested with real workloads including deliberate regression scenarios and live rollback verification.
+Consize is **production-ready**; it can be installed via Helm chart in the cluster, and only supports AWS and GCP for now. The core safety engine is fully implemented, tested, and battle-tested with real workloads including deliberate regression scenarios and live rollback verification.
 
 | Surface | Status |
 |---|---|
@@ -88,7 +86,7 @@ Consize is **production-ready** and deployed on live GKE clusters. The core safe
 
 ## Roadmap
 
-The Grafana project defined its roadmap by this principle: *"We build with the community, not for the community."* This roadmap is a directional guide, not a contract. Community feedback, pull requests, and real-world adoption will shape its evolution.
+In line with Grafana's principle, we *"We [want] to build with the community, [and] not for the community."* So community feedback, pull requests, and real-world adoption will shape the evolution of Consize.
 
 ### Phase 1 — Ecosystem Expansion
 *Broaden the surfaces Consize can scan and optimize.*
@@ -146,7 +144,7 @@ We are aiming to follow governance patterns established by CNCF projects, with a
 1. **Spin up the local environment in under 5 minutes:**
    ```sh
    # Requires: Docker, kind, Go 1.22+
-   git clone https://github.com/YOUR_ORG/consize.git
+   git clone https://github.com/TheInvincibleRalph/consize.git
    cd consize
    docker compose up -d   # Postgres + Prometheus with synthetic fixtures
    go run ./engine/cmd/api
@@ -160,7 +158,7 @@ We are aiming to follow governance patterns established by CNCF projects, with a
 
 3. **Propose a change** — Open a GitHub Discussion before large PRs. We use Architecture Decision Records (ADRs) in `docs/decisions.md` to record significant decisions. New contributors are encouraged to write ADRs for features they add.
 
-4. **Join the conversation:** GitHub Discussions, or reach out directly on [Twitter/X](https://twitter.com/) for design feedback.
+4. **Join the conversation:** GitHub Discussions, or reach out directly on [LinkedIn](https://linkedin.com/in/raphael-adesegun/) for design feedback.
 
 ---
 
