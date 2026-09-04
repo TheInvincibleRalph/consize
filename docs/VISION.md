@@ -86,7 +86,7 @@ Consize is **production-ready**; it can be installed via Helm chart in the clust
 
 ## Roadmap
 
-In line with Grafana's principle, we *"We [want] to build with the community, [and] not for the community."* So community feedback, pull requests, and real-world adoption will shape the evolution of Consize.
+In line with Grafana's principle, *"We [want] to build with the community, [and] not for the community."* So community feedback, pull requests, and real-world adoption will shape the evolution of Consize.
 
 ### Phase 1 — Ecosystem Expansion
 *Broaden the surfaces Consize can scan and optimize.*
