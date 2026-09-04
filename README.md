@@ -54,7 +54,7 @@ helm install consize oci://ghcr.io/theinvincibleralph/charts/consize \
 
 ## Configuration
 
-For detailed instructions on configuring Helm values, setting up Service Accounts, and providing Integration Secrets, please refer to the **[Installation section of the Customer Guide](docs/customer-guide.md#installation)**.
+For detailed instructions on configuring Helm values, setting up Service Accounts, and providing Integration Secrets, please refer to this **[Installation Guide](docs/customer-guide.md#installation)**.
 
 ---
 
