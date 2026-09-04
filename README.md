@@ -54,56 +54,7 @@ helm install consize oci://ghcr.io/theinvincibleralph/charts/consize \
 
 ## Configuration
 
-Consize uses the standard Kubernetes pattern: credentials live in **Secrets**, and scoping lives in **`values.yaml`**. We deliberately separate read scope from write scope for maximum safety.
-
-### 1. Required Secrets
-Before installing, you must provide your Postgres and Prometheus connection strings:
-```bash
-kubectl create namespace consize-system
-
-kubectl -n consize-system create secret generic consize-store \
-  --from-literal=database-url='postgres://USER:PASSWORD@HOST:5432/consize?sslmode=require' \
-  --from-literal=prometheus-url='http://prometheus-operated.monitoring:9090'
-```
-
-### 2. Service Accounts & RBAC (`values.yaml`)
-Consize uses two distinct ServiceAccounts: a `reader` for scanning workloads and a `writer` for applying patches and rollbacks. 
-
-You explicitly control where Consize can act. For example, to read the whole cluster but only allow changes in the `boutique` namespace:
-```yaml
-# Read cluster-wide
-collector:
-  namespaces: []
-
-# Only allow writes (apply/rollback) in the boutique namespace
-rbac:
-  writer:
-    namespaces:
-      - boutique
-```
-
-### 3. Integrations (Slack, GitHub, Cloud Waste)
-Optional features require their respective secrets:
-
-```bash
-# For IaC PR workflows
-kubectl -n consize-system create secret generic consize-github \
-  --from-literal=token='github_pat_...'
-
-# For Cloud Waste scanning (GCP)
-kubectl -n consize-system create secret generic consize-gcp \
-  --from-file=key.json=./consize-gcp-service-account.json
-```
-Then reference them in `values.yaml`:
-```yaml
-github:
-  existingSecret: consize-github
-cloudWaste:
-  enabled: true
-  provider: gcp
-```
-
-For the complete list of Helm values and deployment modes, see the **[Helm Chart Documentation](charts/consize/README.md)**.
+For detailed instructions on configuring Helm values, setting up Service Accounts, and providing Integration Secrets, please refer to the **[Installation section of the Customer Guide](docs/customer-guide.md#installation)**.
 
 ---
 
