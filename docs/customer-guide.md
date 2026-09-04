@@ -367,6 +367,28 @@ serviceAccounts:
       # eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/consize-scanner
 ```
 
+<details>
+<summary><strong>How to create the GCP Workload Identity Role (CLI)</strong></summary>
+
+If you haven't created the Cloud IAM role yet, you can do so quickly using the `gcloud` CLI. This creates the role, gives it read-only permissions, and binds it to the Kubernetes ServiceAccount that Helm will create (`consize-system/consize-reader`).
+
+```sh
+# 1. Create the Google Cloud Service Account (GSA)
+gcloud iam service-accounts create consize-scanner --project=PROJECT_ID
+
+# 2. Grant the GSA read-only permissions (e.g., Compute Viewer for cloud-waste)
+gcloud projects add-iam-policy-binding PROJECT_ID \
+    --member="serviceAccount:consize-scanner@PROJECT_ID.iam.gserviceaccount.com" \
+    --role="roles/compute.viewer"
+
+# 3. Bind the GSA to the Kubernetes ServiceAccount (KSA)
+gcloud iam service-accounts add-iam-policy-binding consize-scanner@PROJECT_ID.iam.gserviceaccount.com \
+    --role roles/iam.workloadIdentityUser \
+    --member "serviceAccount:PROJECT_ID.svc.id.goog[consize-system/consize-reader]" \
+    --project=PROJECT_ID
+```
+</details>
+
 Alternatively, if you do not use Workload Identity, you can provide a static JSON key file via a secret:
 
 ```sh
