@@ -1,0 +1,12 @@
+.git/
+.gocache/
+bin/
+/collector
+tmp/
+tmp-localdemo/
+output/
+*.test
+coverage.out
+dist/
+node_modules/
+.DS_Store

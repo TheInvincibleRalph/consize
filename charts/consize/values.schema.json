@@ -1,0 +1,312 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Consize Helm values",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "global": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "imageRegistry": { "type": "string" },
+        "imageTag": { "type": "string" },
+        "imagePullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        },
+        "imagePullSecrets": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "commonLabels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "namespace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "serviceAccounts": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "reader": { "$ref": "#/definitions/serviceAccount" },
+        "writer": { "$ref": "#/definitions/serviceAccount" }
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "create": { "type": "boolean" },
+        "reader": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "clusterWideWhenNamespacesEmpty": { "type": "boolean" }
+          }
+        },
+        "writer": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "namespaces": { "$ref": "#/definitions/stringList" }
+          }
+        }
+      }
+    },
+    "images": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "registry": { "type": "string" },
+          "repository": { "type": "string", "minLength": 1 },
+          "tag": { "type": "string" }
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "existingSecret": { "type": "string", "minLength": 1 },
+        "keys": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "databaseUrl": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "prometheus": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "existingSecret": { "type": "string", "minLength": 1 },
+        "keys": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "required": { "type": "boolean" },
+        "cookieSecure": { "type": "boolean" },
+        "bootstrapAdmin": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "key": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "api": { "$ref": "#/definitions/workload" },
+    "ui": {
+      "allOf": [
+        { "$ref": "#/definitions/workload" },
+        {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "port": { "type": "integer", "minimum": 1 },
+            "apiUpstream": { "type": "string" },
+            "ingress": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "className": { "type": "string" },
+                "annotations": { "type": "object" },
+                "hosts": { "type": "array" },
+                "tls": { "type": "array" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "collector": {
+      "allOf": [
+        { "$ref": "#/definitions/cronWorkload" },
+        {
+          "type": "object",
+          "properties": {
+            "namespaces": { "$ref": "#/definitions/stringList" },
+            "window": { "type": "string", "minLength": 1 },
+            "step": { "type": "string", "minLength": 1 },
+            "dbMetrics": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "enum": ["none", "fixture", "cloudwatch", "gcp"]
+                },
+                "filter": { "type": "string" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "analyze": {
+      "allOf": [
+        { "$ref": "#/definitions/cronWorkload" },
+        {
+          "type": "object",
+          "properties": {
+            "minDataDays": { "type": "number", "minimum": 0 },
+            "recommendationRetention": { "type": "string", "minLength": 1 },
+            "pricing": { "type": "string" },
+            "region": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "verify": {
+      "allOf": [
+        { "$ref": "#/definitions/cronWorkload" },
+        {
+          "type": "object",
+          "properties": {
+            "window": { "type": "string", "minLength": 1 },
+            "sustainedMinutes": { "type": "integer", "minimum": 1 },
+            "sli": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "errorExpr": { "type": "string" },
+                "p99Expr": { "type": "string" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "cloudWaste": {
+      "allOf": [
+        { "$ref": "#/definitions/cronWorkload" },
+        {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": ["none", "disabled", "fixture", "gcp"]
+            }
+          }
+        }
+      ]
+    },
+    "reports": { "$ref": "#/definitions/cronWorkload" },
+    "migrate": {
+      "allOf": [
+        { "$ref": "#/definitions/workload" },
+        {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "useHelmHook": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "github": { "$ref": "#/definitions/secretRef" },
+    "slack": { "$ref": "#/definitions/secretRef" },
+    "gcp": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "project": { "type": "string" },
+        "credentials": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "key": { "type": "string", "minLength": 1 },
+            "mountPath": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "podSecurityContext": { "type": "object" },
+    "containerSecurityContext": { "type": "object" },
+    "nodeSelector": { "type": "object" },
+    "tolerations": { "type": "array" },
+    "affinity": { "type": "object" }
+  },
+  "definitions": {
+    "stringList": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "secretRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingSecret": { "type": "string" },
+        "key": { "type": "string", "minLength": 1 }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 1 },
+        "listenPort": { "type": "integer", "minimum": 1 },
+        "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "service": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "type": { "type": "string" },
+            "port": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "resources": { "type": "object" },
+        "extraEnv": { "type": "array" }
+      }
+    },
+    "cronWorkload": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "schedule": { "type": "string", "minLength": 1 },
+        "successfulJobsHistoryLimit": { "type": "integer", "minimum": 0 },
+        "failedJobsHistoryLimit": { "type": "integer", "minimum": 0 },
+        "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "resources": { "type": "object" },
+        "extraEnv": { "type": "array" }
+      }
+    }
+  }
+}

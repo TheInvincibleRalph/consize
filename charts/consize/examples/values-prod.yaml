@@ -1,0 +1,63 @@
+global:
+  imageRegistry: us-docker.pkg.dev/devops-portfolio-prod/consize
+  imageTag: latest
+
+namespace:
+  create: true
+  name: consize-system
+
+database:
+  existingSecret: consize-store
+  keys:
+    databaseUrl: database-url
+
+prometheus:
+  existingSecret: consize-store
+  keys:
+    url: prometheus-url
+
+auth:
+  required: true
+  cookieSecure: true
+  bootstrapAdmin:
+    existingSecret: consize-auth
+    key: bootstrap-admin
+
+github:
+  existingSecret: consize-github
+  key: token
+
+slack:
+  existingSecret: consize-alerts
+  key: slack-webhook
+
+gcp:
+  project: devops-portfolio-prod
+  credentials:
+    existingSecret: consize-gcp
+    key: key.json
+
+collector:
+  # Empty means cluster-wide read-only discovery.
+  namespaces: []
+  dbMetrics:
+    provider: gcp
+
+analyze:
+  # Bootstrap value for a fresh fleet. Raise to 5 after enough history.
+  minDataDays: 0.1
+  pricing: static
+
+verify:
+  window: 1h
+  sustainedMinutes: 5
+
+cloudWaste:
+  enabled: true
+  provider: gcp
+
+rbac:
+  writer:
+    # Direct apply/rollback is explicitly scoped. IaC PR mode does not need this.
+    namespaces:
+      - boutique

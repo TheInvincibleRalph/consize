@@ -1,0 +1,31 @@
+substitutions:
+  _REG: us-docker.pkg.dev/devops-portfolio-prod/consize
+  _TAG: manual
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "--build-arg", "BIN=api", "-t", "${_REG}/api:${_TAG}", "."]
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "--build-arg", "BIN=collector", "-t", "${_REG}/collector:${_TAG}", "."]
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "--build-arg", "BIN=analyze", "-t", "${_REG}/analyze:${_TAG}", "."]
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "--build-arg", "BIN=verify", "-t", "${_REG}/verify:${_TAG}", "."]
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "--build-arg", "BIN=report", "-t", "${_REG}/report:${_TAG}", "."]
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "--build-arg", "BIN=costscan", "-t", "${_REG}/costscan:${_TAG}", "."]
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "--build-arg", "BIN=migrate", "-t", "${_REG}/migrate:${_TAG}", "."]
+
+images:
+  - "${_REG}/api:${_TAG}"
+  - "${_REG}/collector:${_TAG}"
+  - "${_REG}/analyze:${_TAG}"
+  - "${_REG}/verify:${_TAG}"
+  - "${_REG}/report:${_TAG}"
+  - "${_REG}/costscan:${_TAG}"
+  - "${_REG}/migrate:${_TAG}"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

@@ -1,0 +1,26 @@
+namespace:
+  name: consize-system
+
+collector:
+  namespaces:
+    - boutique
+    - checkout
+  dbMetrics:
+    provider: none
+
+rbac:
+  writer:
+    namespaces:
+      - boutique
+
+cloudWaste:
+  enabled: false
+
+auth:
+  required: true
+
+github:
+  existingSecret: consize-github
+
+slack:
+  existingSecret: consize-alerts

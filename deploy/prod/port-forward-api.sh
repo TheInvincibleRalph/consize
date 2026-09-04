@@ -16,5 +16,11 @@ set +a
 
 printf 'forwarding prod API: http://127.0.0.1:%s -> svc/%s:8080\n' \
   "$CONSIZE_API_LOCAL_PORT" "$CONSIZE_API_SERVICE"
-exec kubectl -n "$CONSIZE_NAMESPACE" port-forward \
-  "svc/$CONSIZE_API_SERVICE" "$CONSIZE_API_LOCAL_PORT:8080"
+
+while true; do
+  kubectl -n "$CONSIZE_NAMESPACE" port-forward \
+    "svc/$CONSIZE_API_SERVICE" "$CONSIZE_API_LOCAL_PORT:8080"
+  status=$?
+  printf 'prod API port-forward exited with status %s; restarting in 2s...\n' "$status" >&2
+  sleep 2
+done

@@ -1,0 +1,57 @@
+{{- if .Values.analyze.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "consize.fullname" . }}-analyze
+  namespace: {{ include "consize.namespace" . }}
+  labels:
+    {{- include "consize.componentLabels" (dict "root" . "component" "analyze") | nindent 4 }}
+spec:
+  schedule: {{ .Values.analyze.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "consize.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: analyze
+          {{- with .Values.analyze.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          {{- with .Values.global.imagePullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . | quote }}
+            {{- end }}
+          {{- end }}
+          restartPolicy: OnFailure
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: analyze
+              image: {{ include "consize.image" (list . "analyze") | quote }}
+              imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              env:
+                {{- include "consize.databaseEnv" . | nindent 16 }}
+                - name: CONSIZE_MIN_DATA_DAYS
+                  value: {{ .Values.analyze.minDataDays | quote }}
+                - name: CONSIZE_REC_RETENTION
+                  value: {{ .Values.analyze.recommendationRetention | quote }}
+                - name: CONSIZE_PRICING
+                  value: {{ .Values.analyze.pricing | quote }}
+                - name: CONSIZE_REGION
+                  value: {{ .Values.analyze.region | quote }}
+                {{- with .Values.analyze.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              resources:
+                {{- toYaml .Values.analyze.resources | nindent 16 }}
+{{- end }}

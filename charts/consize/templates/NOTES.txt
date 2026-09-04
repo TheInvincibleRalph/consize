@@ -1,0 +1,54 @@
+Consize has been installed into namespace {{ include "consize.namespace" . }}.
+
+Core services:
+  API: {{ include "consize.fullname" . }}-api:{{ .Values.api.service.port }}
+{{- if .Values.ui.enabled }}
+  UI:  {{ include "consize.fullname" . }}-ui:{{ .Values.ui.service.port }}
+{{- end }}
+
+Check the release:
+  kubectl -n {{ include "consize.namespace" . }} get deploy,svc,cronjob,job
+  kubectl -n {{ include "consize.namespace" . }} rollout status deploy/{{ include "consize.fullname" . }}-api
+
+Port-forward for local access:
+  kubectl -n {{ include "consize.namespace" . }} port-forward svc/{{ include "consize.fullname" . }}-api 18099:{{ .Values.api.service.port }}
+{{- if .Values.ui.enabled }}
+  kubectl -n {{ include "consize.namespace" . }} port-forward svc/{{ include "consize.fullname" . }}-ui 3000:{{ .Values.ui.service.port }}
+{{- end }}
+
+Health check:
+  curl http://127.0.0.1:18099/readyz
+
+Scope:
+{{- if empty .Values.collector.namespaces }}
+  Collector read scope: cluster-wide
+{{- else }}
+  Collector read scope: {{ join ", " .Values.collector.namespaces }}
+{{- end }}
+{{- if .Values.rbac.writer.namespaces }}
+  Direct apply namespaces: {{ join ", " .Values.rbac.writer.namespaces }}
+{{- else }}
+  Direct apply namespaces: none
+{{- end }}
+  IaC PR mode: available when the GitHub token secret is configured.
+
+Required secrets:
+  Database:   {{ .Values.database.existingSecret }} / {{ .Values.database.keys.databaseUrl }}
+  Prometheus: {{ .Values.prometheus.existingSecret }} / {{ .Values.prometheus.keys.url }}
+{{- if .Values.github.existingSecret }}
+  GitHub:     {{ .Values.github.existingSecret }} / {{ .Values.github.key }}
+{{- else }}
+  GitHub:     not configured
+{{- end }}
+{{- if .Values.slack.existingSecret }}
+  Slack:      {{ .Values.slack.existingSecret }} / {{ .Values.slack.key }}
+{{- else }}
+  Slack:      not configured
+{{- end }}
+
+Cloud waste:
+{{- if .Values.cloudWaste.enabled }}
+  Enabled with provider {{ .Values.cloudWaste.provider }}.
+{{- else }}
+  Disabled. Enable with cloudWaste.enabled=true and a real provider.
+{{- end }}

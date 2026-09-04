@@ -1,0 +1,71 @@
+{{- if .Values.verify.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "consize.fullname" . }}-verify
+  namespace: {{ include "consize.namespace" . }}
+  labels:
+    {{- include "consize.componentLabels" (dict "root" . "component" "verify") | nindent 4 }}
+spec:
+  schedule: {{ .Values.verify.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "consize.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: verify
+          {{- with .Values.verify.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          serviceAccountName: {{ include "consize.writerServiceAccountName" . }}
+          {{- with .Values.global.imagePullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . | quote }}
+            {{- end }}
+          {{- end }}
+          restartPolicy: OnFailure
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: verify
+              image: {{ include "consize.image" (list . "verify") | quote }}
+              imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              env:
+                {{- include "consize.databaseEnv" . | nindent 16 }}
+                {{- include "consize.prometheusEnv" . | nindent 16 }}
+                - name: CONSIZE_VERIFY_WINDOW
+                  value: {{ .Values.verify.window | quote }}
+                - name: CONSIZE_SUSTAINED_MINUTES
+                  value: {{ .Values.verify.sustainedMinutes | quote }}
+                {{- if .Values.verify.sli.errorExpr }}
+                - name: CONSIZE_SLI_ERROR_EXPR
+                  value: {{ .Values.verify.sli.errorExpr | quote }}
+                {{- end }}
+                {{- if .Values.verify.sli.p99Expr }}
+                - name: CONSIZE_SLI_P99_EXPR
+                  value: {{ .Values.verify.sli.p99Expr | quote }}
+                {{- end }}
+                {{- if .Values.slack.existingSecret }}
+                - name: CONSIZE_SLACK_WEBHOOK
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.slack.existingSecret }}
+                      key: {{ .Values.slack.key }}
+                      optional: true
+                {{- end }}
+                {{- with .Values.verify.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              resources:
+                {{- toYaml .Values.verify.resources | nindent 16 }}
+{{- end }}

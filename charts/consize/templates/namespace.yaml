@@ -1,0 +1,9 @@
+{{- if .Values.namespace.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "consize.namespace" . }}
+  labels:
+    {{- include "consize.labels" . | nindent 4 }}
+    consize.savings.dev/managed-by: consize
+{{- end }}

@@ -1,0 +1,55 @@
+{{- if .Values.cloudWaste.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "consize.fullname" . }}-costscan
+  namespace: {{ include "consize.namespace" . }}
+  labels:
+    {{- include "consize.componentLabels" (dict "root" . "component" "costscan") | nindent 4 }}
+spec:
+  schedule: {{ .Values.cloudWaste.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "consize.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: costscan
+          {{- with .Values.cloudWaste.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          serviceAccountName: {{ include "consize.readerServiceAccountName" . }}
+          {{- with .Values.global.imagePullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . | quote }}
+            {{- end }}
+          {{- end }}
+          restartPolicy: OnFailure
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: costscan
+              image: {{ include "consize.image" (list . "costscan") | quote }}
+              imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              env:
+                {{- include "consize.databaseEnv" . | nindent 16 }}
+                - name: CONSIZE_COSTSCAN
+                  value: {{ .Values.cloudWaste.provider | quote }}
+                {{- include "consize.gcpEnv" . | nindent 16 }}
+                {{- with .Values.cloudWaste.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              resources:
+                {{- toYaml .Values.cloudWaste.resources | nindent 16 }}
+              {{- include "consize.gcpVolumeMount" . | nindent 14 }}
+          {{- include "consize.gcpVolume" . | nindent 10 }}
+{{- end }}

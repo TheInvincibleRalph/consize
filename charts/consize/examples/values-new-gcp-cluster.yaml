@@ -1,0 +1,79 @@
+global:
+  # TODO: Update with your new GCP project registry
+  imageRegistry: us-docker.pkg.dev/NEW_PROJECT_ID_HERE/consize
+  imageTag: latest
+
+namespace:
+  create: true
+  name: consize-system
+
+# Use Workload Identity instead of mounting a JSON key for the new cluster!
+# This is much cleaner and more secure for GCP.
+serviceAccounts:
+  reader:
+    create: true
+    annotations:
+      # TODO: Update NEW_PROJECT_ID_HERE
+      iam.gke.io/gcp-service-account: consize-reader@NEW_PROJECT_ID_HERE.iam.gserviceaccount.com
+  writer:
+    create: true
+    annotations:
+      # TODO: Update NEW_PROJECT_ID_HERE
+      iam.gke.io/gcp-service-account: consize-writer@NEW_PROJECT_ID_HERE.iam.gserviceaccount.com
+
+database:
+  existingSecret: consize-store
+  keys:
+    databaseUrl: database-url
+
+prometheus:
+  existingSecret: consize-store
+  keys:
+    url: prometheus-url
+
+auth:
+  required: true
+  cookieSecure: true
+  bootstrapAdmin:
+    existingSecret: consize-auth
+    key: bootstrap-admin
+
+github:
+  existingSecret: consize-github
+  key: token
+
+slack:
+  existingSecret: consize-alerts
+  key: slack-webhook
+
+gcp:
+  # TODO: Update NEW_PROJECT_ID_HERE
+  project: NEW_PROJECT_ID_HERE
+  # Leave credentials empty because we are using Workload Identity via the ServiceAccount annotations above.
+  credentials:
+    existingSecret: ""
+    key: ""
+
+collector:
+  namespaces: []
+  dbMetrics:
+    provider: gcp
+
+analyze:
+  minDataDays: 0.1
+  pricing: static
+
+verify:
+  window: 1h
+  sustainedMinutes: 5
+
+cloudWaste:
+  enabled: true
+  provider: gcp
+
+rbac:
+  writer:
+    # Explicitly scope direct writes. Leave empty for IaC PR-only mode.
+    namespaces:
+      - boutique
+

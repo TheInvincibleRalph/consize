@@ -1,0 +1,13 @@
+substitutions:
+  _REG: us-docker.pkg.dev/devops-portfolio-prod/consize
+  _TAG: manual
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "--build-arg", "BIN=verify", "-t", "${_REG}/verify:${_TAG}", "."]
+
+images:
+  - "${_REG}/verify:${_TAG}"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

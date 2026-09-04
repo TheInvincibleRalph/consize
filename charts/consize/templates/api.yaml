@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "consize.fullname" . }}-api
+  namespace: {{ include "consize.namespace" . }}
+  labels:
+    {{- include "consize.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      {{- include "consize.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "consize.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+      {{- with .Values.api.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "consize.writerServiceAccountName" . }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "consize.image" (list . "api") | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.listenPort }}
+          env:
+            {{- include "consize.databaseEnv" . | nindent 12 }}
+            - name: CONSIZE_LISTEN_PORT
+              value: {{ .Values.api.listenPort | quote }}
+            - name: CONSIZE_AUTH_REQUIRED
+              value: {{ .Values.auth.required | quote }}
+            - name: CONSIZE_COOKIE_SECURE
+              value: {{ .Values.auth.cookieSecure | quote }}
+            - name: CONSIZE_VERIFY_WINDOW
+              value: {{ .Values.verify.window | quote }}
+            - name: CONSIZE_COSTSCAN
+              value: {{ .Values.cloudWaste.provider | quote }}
+            {{- include "consize.gcpEnv" . | nindent 12 }}
+            {{- if .Values.slack.existingSecret }}
+            - name: CONSIZE_SLACK_WEBHOOK
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.slack.existingSecret }}
+                  key: {{ .Values.slack.key }}
+                  optional: true
+            {{- end }}
+            {{- if .Values.github.existingSecret }}
+            - name: CONSIZE_GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.github.existingSecret }}
+                  key: {{ .Values.github.key }}
+                  optional: true
+            {{- end }}
+            {{- if .Values.auth.bootstrapAdmin.existingSecret }}
+            - name: CONSIZE_BOOTSTRAP_ADMIN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.bootstrapAdmin.existingSecret }}
+                  key: {{ .Values.auth.bootstrapAdmin.key }}
+                  optional: true
+            {{- end }}
+            {{- with .Values.api.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 18
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          {{- include "consize.gcpVolumeMount" . | nindent 10 }}
+      {{- include "consize.gcpVolume" . | nindent 6 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "consize.fullname" . }}-api
+  namespace: {{ include "consize.namespace" . }}
+  labels:
+    {{- include "consize.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  type: {{ .Values.api.service.type }}
+  selector:
+    {{- include "consize.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: {{ .Values.api.service.port }}
+      targetPort: http

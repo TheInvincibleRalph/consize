@@ -1,0 +1,245 @@
+global:
+  imageRegistry: consize
+  imageTag: latest
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+commonLabels: {}
+
+namespace:
+  create: true
+  name: consize-system
+
+serviceAccounts:
+  reader:
+    create: true
+    name: consize-reader
+    annotations: {}
+  writer:
+    create: true
+    name: consize-writer
+    annotations: {}
+
+rbac:
+  create: true
+
+  # Read scope follows collector.namespaces:
+  # - [] means cluster-wide read-only discovery.
+  # - ["boutique"] creates namespace-local read Roles/RoleBindings only.
+  reader:
+    clusterWideWhenNamespacesEmpty: true
+
+  # Direct apply/rollback is never cluster-wide by default. Add only the
+  # namespaces where Consize is allowed to update Deployment resources.
+  writer:
+    enabled: true
+    namespaces: []
+
+images:
+  api:
+    repository: api
+  ui:
+    repository: ui
+  collector:
+    repository: collector
+  analyze:
+    repository: analyze
+  verify:
+    repository: verify
+  costscan:
+    repository: costscan
+  report:
+    repository: report
+  migrate:
+    repository: migrate
+
+database:
+  existingSecret: consize-store
+  keys:
+    databaseUrl: database-url
+
+prometheus:
+  existingSecret: consize-store
+  keys:
+    url: prometheus-url
+
+auth:
+  required: true
+  cookieSecure: true
+  bootstrapAdmin:
+    existingSecret: consize-auth
+    key: bootstrap-admin
+
+api:
+  replicas: 1
+  listenPort: 8080
+  podAnnotations: {}
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  extraEnv: []
+
+ui:
+  enabled: true
+  replicas: 1
+  port: 3000
+  apiUpstream: ""
+  podAnnotations: {}
+  service:
+    type: ClusterIP
+    port: 3000
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts: []
+    tls: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  extraEnv: []
+
+collector:
+  enabled: true
+  schedule: "*/15 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # Empty means cluster-wide read discovery. Set a list for team-scoped installs.
+  namespaces: []
+  window: 14d
+  step: 15m
+  podAnnotations: {}
+  dbMetrics:
+    provider: none
+    filter: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  extraEnv: []
+
+analyze:
+  enabled: true
+  schedule: "*/15 * * * *"
+  podAnnotations: {}
+  minDataDays: 5
+  recommendationRetention: 168h
+  pricing: static
+  region: us-east-1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  extraEnv: []
+
+verify:
+  enabled: true
+  schedule: "* * * * *"
+  # Base window. Runtime scales by apply step number: step 1 = 1h, step 2 = 2h.
+  window: 1h
+  sustainedMinutes: 5
+  podAnnotations: {}
+  sli:
+    errorExpr: ""
+    p99Expr: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  extraEnv: []
+
+cloudWaste:
+  enabled: false
+  provider: none
+  schedule: "0 7 * * *"
+  podAnnotations: {}
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  extraEnv: []
+
+reports:
+  enabled: true
+  schedule: "0 9 * * 1"
+  podAnnotations: {}
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  extraEnv: []
+
+migrate:
+  enabled: true
+  useHelmHook: true
+  podAnnotations: {}
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+github:
+  # Token is mounted as CONSIZE_GITHUB_TOKEN. The value should live in a
+  # Kubernetes Secret; Consize stores only routing/repository metadata.
+  existingSecret: ""
+  key: token
+
+slack:
+  # Used for alert test notifications, verification failure alerts, and
+  # weekly reports when enabled in the app.
+  existingSecret: ""
+  key: slack-webhook
+
+gcp:
+  project: ""
+  credentials:
+    existingSecret: ""
+    key: key.json
+    mountPath: /etc/consize-gcp
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

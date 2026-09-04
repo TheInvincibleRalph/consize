@@ -1,0 +1,66 @@
+{{- if .Values.collector.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "consize.fullname" . }}-collector
+  namespace: {{ include "consize.namespace" . }}
+  labels:
+    {{- include "consize.componentLabels" (dict "root" . "component" "collector") | nindent 4 }}
+spec:
+  schedule: {{ .Values.collector.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.collector.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.collector.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "consize.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: collector
+          {{- with .Values.collector.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          serviceAccountName: {{ include "consize.readerServiceAccountName" . }}
+          {{- with .Values.global.imagePullSecrets }}
+          imagePullSecrets:
+            {{- range . }}
+            - name: {{ . | quote }}
+            {{- end }}
+          {{- end }}
+          restartPolicy: OnFailure
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: collector
+              image: {{ include "consize.image" (list . "collector") | quote }}
+              imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              env:
+                {{- include "consize.databaseEnv" . | nindent 16 }}
+                {{- include "consize.prometheusEnv" . | nindent 16 }}
+                - name: CONSIZE_NAMESPACES
+                  value: {{ join "," .Values.collector.namespaces | quote }}
+                - name: CONSIZE_STEP
+                  value: {{ .Values.collector.step | quote }}
+                - name: CONSIZE_WINDOW
+                  value: {{ .Values.collector.window | quote }}
+                - name: CONSIZE_DBMETRICS
+                  value: {{ .Values.collector.dbMetrics.provider | quote }}
+                {{- if .Values.collector.dbMetrics.filter }}
+                - name: CONSIZE_DB_FILTER
+                  value: {{ .Values.collector.dbMetrics.filter | quote }}
+                {{- end }}
+                {{- include "consize.gcpEnv" . | nindent 16 }}
+                {{- with .Values.collector.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              resources:
+                {{- toYaml .Values.collector.resources | nindent 16 }}
+              {{- include "consize.gcpVolumeMount" . | nindent 14 }}
+          {{- include "consize.gcpVolume" . | nindent 10 }}
+{{- end }}
