@@ -65,15 +65,23 @@ func SourceFor(kind string) (Source, string, error) {
 		return FixtureSource{}, "fixture", nil
 	case "gcp":
 		return NewGCPSource(), "Google Compute Engine (CONSIZE_COSTSCAN=gcp)", nil
+	case "aws":
+		src, err := NewAWSSource(context.Background())
+		if err != nil {
+			return nil, "", err
+		}
+		return src, "Amazon Web Services (CONSIZE_COSTSCAN=aws)", nil
 	}
-	return nil, "", fmt.Errorf("unknown source %q (supported: none, fixture, gcp)", kind)
+	return nil, "", fmt.Errorf("unknown source %q (supported: none, fixture, gcp, aws)", kind)
 }
 
 func DirectApplierFor(provider string) (DirectApplier, error) {
 	switch strings.TrimSpace(strings.ToLower(provider)) {
 	case "gcp":
 		return NewGCPSource(), nil
-	case "aws", "":
+	case "aws":
+		return NewAWSSource(context.Background())
+	case "":
 		return nil, fmt.Errorf("direct cleanup is not configured for provider %q yet; open an IaC PR instead", provider)
 	default:
 		return nil, fmt.Errorf("direct cleanup is not supported for provider %q", provider)

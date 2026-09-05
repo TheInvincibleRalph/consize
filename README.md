@@ -44,7 +44,7 @@ helm show values oci://ghcr.io/theinvincibleralph/charts/consize > values.yaml
 
 # 2. Install the chart using your customized values
 helm install consize oci://ghcr.io/theinvincibleralph/charts/consize \
-  --version 0.1.1 \
+  --version 0.2.0 \
   --namespace consize-system \
   --create-namespace \
   -f values.yaml

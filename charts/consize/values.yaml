@@ -228,6 +228,9 @@ gcp:
     key: key.json
     mountPath: /etc/consize-gcp
 
+aws:
+  region: ""
+
 podSecurityContext:
   runAsNonRoot: true
   seccompProfile:

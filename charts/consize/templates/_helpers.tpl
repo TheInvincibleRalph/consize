@@ -70,7 +70,7 @@ app.kubernetes.io/component: {{ .component }}
 
 {{- define "consize.validate" -}}
 {{- if and .Values.cloudWaste.enabled (or (eq .Values.cloudWaste.provider "none") (eq .Values.cloudWaste.provider "disabled") (eq .Values.cloudWaste.provider "")) -}}
-{{- fail "cloudWaste.enabled=true requires cloudWaste.provider to be gcp or fixture" -}}
+{{- fail "cloudWaste.enabled=true requires cloudWaste.provider to be gcp, aws, or fixture" -}}
 {{- end -}}
 {{- if and (eq .Values.cloudWaste.provider "gcp") (not .Values.gcp.project) (not .Values.gcp.credentials.existingSecret) -}}
 {{- fail "cloudWaste.provider=gcp requires gcp.project, gcp.credentials.existingSecret, or workload identity/metadata access that can resolve a project" -}}
@@ -114,6 +114,13 @@ app.kubernetes.io/component: {{ .component }}
 {{- if .Values.gcp.credentials.existingSecret }}
 - name: GOOGLE_APPLICATION_CREDENTIALS
   value: {{ printf "%s/%s" .Values.gcp.credentials.mountPath .Values.gcp.credentials.key | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "consize.awsEnv" -}}
+{{- if .Values.aws.region }}
+- name: AWS_REGION
+  value: {{ .Values.aws.region | quote }}
 {{- end }}
 {{- end -}}
 

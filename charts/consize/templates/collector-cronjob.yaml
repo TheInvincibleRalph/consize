@@ -56,6 +56,7 @@ spec:
                   value: {{ .Values.collector.dbMetrics.filter | quote }}
                 {{- end }}
                 {{- include "consize.gcpEnv" . | nindent 16 }}
+                {{- include "consize.awsEnv" . | nindent 16 }}
                 {{- with .Values.collector.extraEnv }}
                 {{- toYaml . | nindent 16 }}
                 {{- end }}

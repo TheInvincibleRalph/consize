@@ -52,6 +52,7 @@ spec:
             - name: CONSIZE_COSTSCAN
               value: {{ .Values.cloudWaste.provider | quote }}
             {{- include "consize.gcpEnv" . | nindent 12 }}
+            {{- include "consize.awsEnv" . | nindent 12 }}
             {{- if .Values.slack.existingSecret }}
             - name: CONSIZE_SLACK_WEBHOOK
               valueFrom:

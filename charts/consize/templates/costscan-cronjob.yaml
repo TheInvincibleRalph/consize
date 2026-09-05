@@ -45,6 +45,7 @@ spec:
                 - name: CONSIZE_COSTSCAN
                   value: {{ .Values.cloudWaste.provider | quote }}
                 {{- include "consize.gcpEnv" . | nindent 16 }}
+                {{- include "consize.awsEnv" . | nindent 16 }}
                 {{- with .Values.cloudWaste.extraEnv }}
                 {{- toYaml . | nindent 16 }}
                 {{- end }}
