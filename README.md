@@ -17,6 +17,18 @@ Cloud infrastructure teams waste 30–50% of their compute and database spend no
 
 ---
 
+## 🤝 How is Consize different from Kubecost?
+
+[Kubecost](https://www.kubecost.com/) is a phenomenal open-source project and the absolute gold standard for Kubernetes cost observability and allocation. If your goal is to map cloud billing data to specific namespaces or cross-charge teams, you should use Kubecost.
+
+However, observing waste and **fixing waste safely** are two different problems. 
+
+Consize compliments the ecosystem by focusing entirely on safe, automated action. While observability tools provide recommendations for engineers to apply manually, Consize acts as an active safety net: it generates rightsizing IaC PRs, executes changes in small steps, and monitors your SLIs (e.g., latency, OOM kills) in real-time. If an application degrades, Consize triggers an automated rollback. 
+
+We built Consize to treat cost optimization as a risky deployment requiring automated verification.
+
+---
+
 ## Try the Interactive Sandbox
 
 The fastest way to experience Consize's safety net is through our **Interactive Sandbox**. It runs entirely on your local machine using a single Docker container, pre-seeded with historical data, cloud waste opportunities, and a live metrics simulation.
