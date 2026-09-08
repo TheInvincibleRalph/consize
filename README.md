@@ -5,7 +5,7 @@
 # Consize
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker)](https://github.com/TheInvincibleRalph/consize-sandbox)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker)](https://github.com/consize-oss/consize-sandbox)
 
 </div>
 
@@ -33,7 +33,7 @@ The fastest way to experience Consize's safety net is through our **Interactive 
 
 ```bash
 # Pull and run the all-in-one interactive sandbox
-docker run -p 3000:3000 -p 8080:8080 -it ghcr.io/theinvincibleralph/consize-sandbox:latest
+docker run -p 3000:3000 -p 8080:8080 -it ghcr.io/consize-oss/consize-sandbox:latest
 ```
 
 Open `http://localhost:3000` in your browser. You can watch the Verifier catch an intentional regression on the `checkout-api` workload and instantly trigger an automatic rollback to restore safety.
@@ -50,10 +50,10 @@ Install Consize onto a live cluster (AWS and GCP currently supported) using our 
 
 ```bash
 # 1. Export the default values to customize your installation
-helm show values oci://ghcr.io/theinvincibleralph/charts/consize > values.yaml
+helm show values oci://ghcr.io/consize-oss/charts/consize > values.yaml
 
 # 2. Install the chart using your customized values
-helm install consize oci://ghcr.io/theinvincibleralph/charts/consize \
+helm install consize oci://ghcr.io/consize-oss/charts/consize \
   --version 0.2.0 \
   --namespace consize-system \
   --create-namespace \

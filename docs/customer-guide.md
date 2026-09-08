@@ -259,7 +259,7 @@ integrations:
     tokenEnv: CONSIZE_GITHUB_TOKEN
     repositories:
       - alias: cluster
-        repo: TheInvincibleRalph/Enterprise-grade-GKE-Project
+        repo: consize-oss/Enterprise-grade-GKE-Project
         baseBranch: main
         rootPath: kubernetes/boutique
 ```

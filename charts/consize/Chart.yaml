@@ -10,9 +10,9 @@ keywords:
   - cost-optimization
   - rightsizing
   - iac
-home: https://github.com/TheInvincibleRalph/consize
+home: https://github.com/consize-oss/consize
 sources:
-  - https://github.com/TheInvincibleRalph/consize
+  - https://github.com/consize-oss/consize
 maintainers:
   - name: Consize
 dependencies:

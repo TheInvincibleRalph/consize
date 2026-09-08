@@ -176,7 +176,7 @@ export default function IntegrationsView() {
                   value={config.organization}
                   disabled={!canWrite}
                   onChange={(e) => updateConfig({ organization: e.target.value })}
-                  placeholder="TheInvincibleRalph"
+                  placeholder="consize-oss"
                 />
               </label>
               <label className="config-field">

@@ -69,7 +69,7 @@ API_UPSTREAM=http://127.0.0.1:18099 npm run dev
 
 Configure the GitHub integration in the UI:
 
-- organization/account: `TheInvincibleRalph`
+- organization/account: `consize-oss`
 - token env var: `CONSIZE_GITHUB_TOKEN`
 - repository alias: `cluster`
 - repository: `Enterprise-grade-GKE-Project`

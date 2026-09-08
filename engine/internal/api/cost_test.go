@@ -127,7 +127,7 @@ func TestPrepareRecommendationIaCPullRequestTreatsURLPathAsRepo(t *testing.T) {
 	recID := seedPendingRec(t, st, "apps", nil)
 
 	rec := post(t, h, "/api/v1/recommendations/"+itoa(recID)+"/iac-pr", map[string]any{
-		"path": "https://github.com/TheInvincibleRalph/ecommerce",
+		"path": "https://github.com/consize-oss/ecommerce",
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("prepare recommendation pr: %d %s", rec.Code, rec.Body.String())
@@ -141,10 +141,10 @@ func TestPrepareRecommendationIaCPullRequestTreatsURLPathAsRepo(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.PullRequest.Repo != "https://github.com/TheInvincibleRalph/ecommerce" {
+	if body.PullRequest.Repo != "https://github.com/consize-oss/ecommerce" {
 		t.Fatalf("URL path should be treated as repo, got %q", body.PullRequest.Repo)
 	}
-	if strings.Contains(body.PullRequest.Diff, "github.com/TheInvincibleRalph/ecommerce") ||
+	if strings.Contains(body.PullRequest.Diff, "github.com/consize-oss/ecommerce") ||
 		!strings.Contains(body.PullRequest.Diff, "terraform/workloads.tf") {
 		t.Fatalf("URL must not be used as a Terraform file path: %s", body.PullRequest.Diff)
 	}

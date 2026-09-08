@@ -46,14 +46,14 @@ func TestGitHubIntegrationConfigRoundTrip(t *testing.T) {
 
 	rec = put(t, h, "/api/v1/integrations/github", map[string]any{
 		"enabled":      true,
-		"organization": "TheInvincibleRalph",
+		"organization": "consize-oss",
 		"token_env":    "CONSIZE_GITHUB_TOKEN",
-		"default_repo": "TheInvincibleRalph/ecommerce",
+		"default_repo": "consize-oss/ecommerce",
 		"default_path": "/terraform/workloads.tf",
 		"repositories": []map[string]any{
 			{
 				"alias":          "commerce",
-				"repo":           "TheInvincibleRalph/ecommerce",
+				"repo":           "consize-oss/ecommerce",
 				"default_branch": "main",
 				"root_path":      "/infra",
 			},
@@ -118,7 +118,7 @@ func TestRecommendationIaCPlanUsesSavedGitHubRepositoryDefaults(t *testing.T) {
 		"repositories": []map[string]any{
 			{
 				"alias":     "commerce",
-				"repo":      "TheInvincibleRalph/ecommerce",
+				"repo":      "consize-oss/ecommerce",
 				"root_path": "infra/live",
 			},
 		},
@@ -140,7 +140,7 @@ func TestRecommendationIaCPlanUsesSavedGitHubRepositoryDefaults(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.PullRequest.Repo != "TheInvincibleRalph/ecommerce" ||
+	if body.PullRequest.Repo != "consize-oss/ecommerce" ||
 		!strings.Contains(body.PullRequest.Diff, "infra/live/terraform/workloads.tf") ||
 		!strings.Contains(body.PullRequest.Diff, `resource "kubernetes_deployment" "api"`) {
 		t.Fatalf("saved repository default was not used: %s", rec.Body.String())
@@ -158,7 +158,7 @@ func TestRecommendationIaCPlanAppliesRepoRootToDefaultPath(t *testing.T) {
 		"repositories": []map[string]any{
 			{
 				"alias":     "commerce",
-				"repo":      "TheInvincibleRalph/ecommerce",
+				"repo":      "consize-oss/ecommerce",
 				"root_path": "infra/live",
 			},
 		},
@@ -190,7 +190,7 @@ func TestRecommendationIaCPlanAvoidsDuplicateTerraformPathSegment(t *testing.T) 
 	recID := seedPendingRec(t, st, "apps", nil)
 
 	rec := put(t, h, "/api/v1/integrations/github", map[string]any{
-		"organization": "TheInvincibleRalph",
+		"organization": "consize-oss",
 		"enabled":      true,
 		"token_env":    "CONSIZE_GITHUB_TOKEN",
 		"default_repo": "infra",
@@ -219,7 +219,7 @@ func TestRecommendationIaCPlanAvoidsDuplicateTerraformPathSegment(t *testing.T) 
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.PullRequest.Repo != "TheInvincibleRalph/Enterprise-grade-GKE-Project" ||
+	if body.PullRequest.Repo != "consize-oss/Enterprise-grade-GKE-Project" ||
 		strings.Contains(body.PullRequest.Diff, "infra/terraform/terraform/") ||
 		!strings.Contains(body.PullRequest.Diff, "infra/terraform/workloads.tf") {
 		t.Fatalf("repo root duplicated Terraform path segment: %s", rec.Body.String())

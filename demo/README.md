@@ -7,7 +7,7 @@ This is a fully self-contained interactive demo of Consize. It spins up the comp
 You don't need a Kubernetes cluster or any external dependencies to run this. Just run:
 
 ```bash
-docker run -p 3000:3000 ghcr.io/theinvincibleralph/consize-sandbox:latest
+docker run -p 3000:3000 ghcr.io/consize-oss/consize-sandbox:latest
 ```
 
 Then open [http://localhost:3000](http://localhost:3000) in your browser.

@@ -54,7 +54,7 @@ We packaged the entire Consize backend (API, Verifier, Prometheus Stub, Postgres
 You don't need a Kubernetes cluster or any external dependencies to run this. Just run:
 
 ```bash
-docker run -p 3000:3000 ghcr.io/theinvincibleralph/consize-sandbox:latest
+docker run -p 3000:3000 ghcr.io/consize-oss/consize-sandbox:latest
 ```
 
 Then open [http://localhost:3000](http://localhost:3000) in your browser. 
@@ -144,7 +144,7 @@ We are aiming to follow governance patterns established by CNCF projects, with a
 1. **Spin up the local environment in under 5 minutes:**
    ```sh
    # Requires: Docker, kind, Go 1.22+
-   git clone https://github.com/TheInvincibleRalph/consize.git
+   git clone https://github.com/consize-oss/consize.git
    cd consize
    docker compose up -d   # Postgres + Prometheus with synthetic fixtures
    go run ./engine/cmd/api
