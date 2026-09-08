@@ -25,8 +25,6 @@ However, observing waste and **fixing waste safely** are two different problems.
 
 Consize compliments the ecosystem by focusing entirely on safe, automated action. While observability tools provide recommendations for engineers to apply manually, Consize acts as an active safety net: it generates rightsizing IaC PRs, executes changes in small steps, and monitors your SLIs (e.g., latency, OOM kills) in real-time. If an application degrades, Consize triggers an automated rollback. 
 
-We built Consize to treat cost optimization as a risky deployment requiring automated verification.
-
 ---
 
 ## Try the Interactive Sandbox
