@@ -17,7 +17,7 @@ Cloud infrastructure teams waste 30–50% of their compute and database spend no
 
 ---
 
-## 🤝 How is Consize different from Kubecost?
+## How is Consize different from Kubecost?
 
 [Kubecost](https://www.kubecost.com/) is a phenomenal open-source project and the absolute gold standard for Kubernetes cost observability and allocation. If your goal is to map cloud billing data to specific namespaces or cross-charge teams, you should use Kubecost.
 
