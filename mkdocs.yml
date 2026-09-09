@@ -1,0 +1,59 @@
+site_name: Consize
+site_url: https://docs.consizehq.com
+site_description: Safe, Automated Action for Kubernetes
+site_author: Consize OSS
+repo_url: https://github.com/consize-oss/consize
+repo_name: consize-oss/consize
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+nav:
+  - Welcome: index.md
+  - The Safety Net: THE_SAFETY_NET.md
+  - Architecture: architecture.md
+  - Features: features.md
+  - Interactive Demo: demo.md
+  - Guides:
+    - Customer Guide: customer-guide.md
+    - Observability: observability.md
+    - Environments: environments.md
+  - Internal / Dev:
+    - Testing: testing.md
+    - E2E Tests: e2e.md
+    - Decisions: decisions.md
+    - Reference: reference.md
+    - Plan: plan.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
